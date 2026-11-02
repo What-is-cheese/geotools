@@ -1,2 +1,2 @@
-[GeoTool](Hello_World.html)
+[GeoTool](waypoints.html)
 

@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Waypoints</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+:root{
+  --ink:#0f2e3a; --ink-2:#2f4f5b; --paper:#f4f7f6; --panel:#ffffff; --line:#d8e2e0;
+  --brand:#0f2e3a; --brand-text:#ffffff; --pin:#f2542d; --danger:#b3261e; --muted:#5d7580;
+  --radius:12px;
+}
+@media (prefers-color-scheme:dark){
+  :root{--ink:#e6f0ee; --ink-2:#b4c9c6; --paper:#0d1b21; --panel:#14272f; --line:#254049;
+    --brand:#5fd3c0; --brand-text:#06231f; --muted:#8fa9a8; --danger:#ff8a80;}
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{font-family:"Avenir Next","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;background:var(--paper);color:var(--ink);display:flex;flex-direction:column}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 18px;background:var(--panel);border-bottom:1px solid var(--line)}
+h1{font-size:1.15rem;margin:0;letter-spacing:.01em;display:flex;align-items:center;gap:10px}
+h1 svg{width:22px;height:22px;color:var(--pin)}
+button{font:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible,.item:focus-visible{outline:3px solid var(--pin);outline-offset:2px}
+.primary{background:var(--brand);color:var(--brand-text);border:0;border-radius:999px;padding:11px 20px;font-weight:650;display:inline-flex;align-items:center;gap:8px;box-shadow:0 2px 8px rgba(0,0,0,.18)}
+.primary:disabled{opacity:.65;cursor:progress}
+.primary svg{width:18px;height:18px}
+.ghost{background:transparent;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px 14px}
+.ghost:hover{background:var(--paper)}
+main{flex:1;min-height:0;display:grid;grid-template-columns:1fr 340px}
+#map{height:100%;width:100%;min-height:0;background:#cfdcd9}
+aside{display:flex;flex-direction:column;min-height:0;background:var(--panel);border-left:1px solid var(--line)}
+aside h2{font-size:.95rem;margin:0;padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+.count{color:var(--muted);font-weight:500}
+#list{list-style:none;margin:0;padding:8px;overflow:auto;flex:1}
+.item{padding:10px 12px;border-radius:10px;cursor:pointer;display:flex;gap:12px;align-items:flex-start}
+.item:hover{background:var(--paper)}
+.item.active{background:var(--paper);box-shadow:inset 3px 0 0 var(--pin)}
+.dot{width:12px;height:12px;border-radius:50%;background:var(--pin);margin-top:5px;flex:none}
+.item b{display:block;font-size:.95rem;word-break:break-word}
+.item small{display:block;color:var(--muted);font-variant-numeric:tabular-nums;line-height:1.5}
+.empty{padding:24px 16px;color:var(--muted);line-height:1.5;font-size:.92rem}
+/* map pin */
+.pin{width:30px;height:30px;transform:translate(-50%,-100%)}
+.pin span{display:block;width:26px;height:26px;margin:2px;background:var(--pin);border:3px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 3px 8px rgba(0,0,0,.4)}
+.pin span::after{content:"";position:absolute;left:50%;top:50%;width:8px;height:8px;margin:-4px 0 0 -4px;background:#fff;border-radius:50%}
+.leaflet-popup-content{margin:14px 16px;font-family:inherit;color:#0f2e3a;min-width:190px}
+.pop h3{margin:0 0 6px;font-size:1rem;word-break:break-word}
+.pop p{margin:2px 0;font-size:.85rem;font-variant-numeric:tabular-nums;color:#41606b}
+.pop .row{display:flex;gap:8px;margin-top:12px}
+.pop button{flex:1;padding:7px 10px;border-radius:8px;border:1px solid #c9d6d3;background:#f4f7f6;color:#0f2e3a;font-weight:600}
+.pop button.del{color:#b3261e;border-color:#e6c3c0}
+/* dialog */
+dialog{border:0;border-radius:16px;padding:0;background:var(--panel);color:var(--ink);width:min(92vw,400px);box-shadow:0 20px 60px rgba(0,0,0,.35)}
+dialog::backdrop{background:rgba(5,20,26,.55)}
+dialog form{padding:22px;display:grid;gap:12px}
+dialog h3{margin:0;font-size:1.1rem}
+dialog label{font-size:.85rem;color:var(--muted)}
+dialog input{width:100%;padding:12px;font:inherit;border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink);margin-top:4px}
+.coords{font-variant-numeric:tabular-nums;color:var(--ink-2);font-size:.9rem;background:var(--paper);padding:10px 12px;border-radius:10px;line-height:1.5}
+.actions{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
+.actions .primary{box-shadow:none;padding:10px 18px}
+.actions .danger{background:var(--danger);color:#fff}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--ink);color:var(--paper);padding:11px 18px;border-radius:10px;font-size:.9rem;max-width:90vw;z-index:2000;opacity:0;pointer-events:none;transition:opacity .2s}
+#toast.show{opacity:1}
+@media (max-width:800px){
+  main{grid-template-columns:1fr;grid-template-rows:minmax(0,3fr) minmax(0,2fr)}
+  aside{border-left:0;border-top:1px solid var(--line)}
+  header{padding:10px 12px}
+  .primary{padding:10px 14px;font-size:.92rem}
+}
+@media (prefers-reduced-motion:reduce){#toast{transition:none}}
+</style>
+</head>
+<body>
+<header>
+  <h1><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z"/></svg>Waypoints</h1>
+  <button class="primary" id="create">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+    <span id="createLabel">Create Point From Location</span>
+  </button>
+</header>
+<main>
+  <div id="map" role="application" aria-label="Map of saved waypoints"></div>
+  <aside>
+    <h2>Saved waypoints <span class="count" id="count">0</span></h2>
+    <ul id="list"></ul>
+  </aside>
+</main>
+
+<dialog id="nameDlg">
+  <form method="dialog" id="nameForm">
+    <h3 id="dlgTitle">Name this waypoint</h3>
+    <div class="coords" id="dlgCoords"></div>
+    <div><label for="nameInput">Waypoint name</label><input id="nameInput" maxlength="80" autocomplete="off" required></div>
+    <div class="actions">
+      <button type="button" class="ghost" id="nameCancel">Cancel</button>
+      <button class="primary" value="ok">Save waypoint</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="delDlg">
+  <form method="dialog">
+    <h3>Delete this waypoint?</h3>
+    <div class="coords" id="delName"></div>
+    <div class="actions">
+      <button type="button" class="ghost" id="delCancel">Keep it</button>
+      <button class="primary danger" value="ok">Delete waypoint</button>
+    </div>
+  </form>
+</dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function(){
+  var KEY = 'waypoints.v1';
+  var waypoints = load();
+  var markers = {};
+  var accuracyCircle = null;
+
+  var map = L.map('map', {zoomControl:true}).setView([20, 0], 2);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }).addTo(map);
+
+  var $ = function(id){ return document.getElementById(id); };
+  var listEl = $('list'), btn = $('create'), label = $('createLabel');
+
+  function load(){
+    try { var d = JSON.parse(localStorage.getItem(KEY)); return Array.isArray(d) ? d : []; }
+    catch(e){ return []; }
+  }
+  function save(){
+    try { localStorage.setItem(KEY, JSON.stringify(waypoints)); }
+    catch(e){ toast('Could not save. Browser storage is unavailable.'); }
+  }
+  function esc(s){ return String(s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function fmtCoord(n){ return Number(n).toFixed(6); }
+  function fmtDate(iso){ return new Date(iso).toLocaleString([], {dateStyle:'medium', timeStyle:'short'}); }
+  var toastTimer;
+  function toast(msg){
+    var t = $('toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(function(){ t.classList.remove('show'); }, 4200);
+  }
+
+  var icon = L.divIcon({className:'', html:'<div class="pin"><span></span></div>', iconSize:[0,0]});
+
+  function popupHtml(w){
+    return '<div class="pop"><h3>'+esc(w.name)+'</h3>'+
+      '<p>Latitude: '+fmtCoord(w.lat)+'</p><p>Longitude: '+fmtCoord(w.lng)+'</p>'+
+      '<p>Created: '+esc(fmtDate(w.created))+'</p>'+
+      '<div class="row"><button data-act="edit" data-id="'+w.id+'">Edit name</button>'+
+      '<button class="del" data-act="del" data-id="'+w.id+'">Delete</button></div></div>';
+  }
+
+  function addMarker(w){
+    var m = L.marker([w.lat, w.lng], {icon:icon, title:w.name}).addTo(map);
+    m.bindPopup(popupHtml(w), {offset:[0,-34]});
+    m.on('popupopen', function(){ setActive(w.id); });
+    m.on('popupclose', function(){ setActive(null); });
+    markers[w.id] = m;
+  }
+
+  function setActive(id){
+    Array.prototype.forEach.call(listEl.children, function(li){
+      li.classList.toggle('active', li.dataset.id === id);
+    });
+  }
+
+  function renderList(){
+    $('count').textContent = waypoints.length;
+    if(!waypoints.length){
+      listEl.innerHTML = '<li class="empty">No waypoints yet. Press “Create Point From Location” to save where you are right now.</li>';
+      return;
+    }
+    listEl.innerHTML = '';
+    waypoints.slice().reverse().forEach(function(w){
+      var li = document.createElement('li');
+      li.className = 'item'; li.tabIndex = 0; li.dataset.id = w.id;
+      li.innerHTML = '<span class="dot"></span><div><b>'+esc(w.name)+'</b><small>'+
+        fmtCoord(w.lat)+', '+fmtCoord(w.lng)+'</small><small>'+esc(fmtDate(w.created))+'</small></div>';
+      li.addEventListener('click', function(){ focusWaypoint(w.id); });
+      li.addEventListener('keydown', function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); focusWaypoint(w.id); } });
+      listEl.appendChild(li);
+    });
+  }
+
+  function focusWaypoint(id){
+    var m = markers[id]; if(!m) return;
+    map.flyTo(m.getLatLng(), 17, {duration:1.2});
+    map.once('moveend', function(){ m.openPopup(); });
+    window.scrollTo(0,0);
+  }
+
+  function askName(opts){
+    return new Promise(function(resolve){
+      var dlg = $('nameDlg'), input = $('nameInput');
+      $('dlgTitle').textContent = opts.title;
+      $('dlgCoords').innerHTML = 'Latitude: '+fmtCoord(opts.lat)+'<br>Longitude: '+fmtCoord(opts.lng);
+      input.value = opts.value;
+      var done = false;
+      function finish(v){ if(done) return; done = true; dlg.removeEventListener('close', onClose); resolve(v); }
+      function onClose(){ var v = input.value.trim(); finish(dlg.returnValue === 'ok' && v ? v : null); }
+      dlg.addEventListener('close', onClose);
+      dlg.returnValue = '';
+      dlg.showModal(); input.focus(); input.select();
+    });
+  }
+  $('nameCancel').addEventListener('click', function(){ $('nameDlg').close('cancel'); });
+  $('delCancel').addEventListener('click', function(){ $('delDlg').close('cancel'); });
+
+  function confirmDelete(w){
+    return new Promise(function(resolve){
+      var dlg = $('delDlg'); $('delName').textContent = w.name; dlg.returnValue = '';
+      dlg.addEventListener('close', function h(){ dlg.removeEventListener('close', h); resolve(dlg.returnValue === 'ok'); });
+      dlg.showModal();
+    });
+  }
+
+  function setBusy(b){
+    btn.disabled = b;
+    label.textContent = b ? 'Finding your location…' : 'Create Point From Location';
+  }
+
+  function geoError(err){
+    var msg = 'Could not get your location.';
+    if(err.code === 1) msg = 'Location permission was denied. Allow location access for this site in your browser settings, then try again.';
+    else if(err.code === 2) msg = 'Your position is unavailable right now. Check that GPS or location services are on.';
+    else if(err.code === 3) msg = 'Finding your location timed out. Try again with a clearer signal.';
+    toast(msg);
+  }
+
+  // The browser shows its own permission prompt the first time this is called.
+  btn.addEventListener('click', function(){
+    if(!('geolocation' in navigator)){ toast('This browser does not support location access.'); return; }
+    if(!window.isSecureContext){ toast('Location needs a secure page (HTTPS or localhost).'); return; }
+    setBusy(true);
+    navigator.geolocation.getCurrentPosition(function(pos){
+      setBusy(false);
+      var lat = pos.coords.latitude, lng = pos.coords.longitude, acc = pos.coords.accuracy;
+      if(accuracyCircle) map.removeLayer(accuracyCircle);
+      accuracyCircle = L.circle([lat,lng], {radius:acc, color:'#f2542d', weight:1, fillOpacity:.1}).addTo(map);
+      map.flyTo([lat,lng], 17, {duration:1.2});
+      askName({title:'Name this waypoint', lat:lat, lng:lng, value:'Waypoint '+(waypoints.length+1)}).then(function(name){
+        if(accuracyCircle){ map.removeLayer(accuracyCircle); accuracyCircle = null; }
+        if(!name){ toast('Waypoint not saved.'); return; }
+        var w = {id:'w'+Date.now().toString(36)+Math.random().toString(36).slice(2,6), name:name, lat:lat, lng:lng, created:new Date().toISOString()};
+        waypoints.push(w); save(); addMarker(w); renderList();
+        markers[w.id].openPopup();
+        toast('Saved “'+name+'”.');
+      });
+    }, function(err){ setBusy(false); geoError(err); },
+    {enableHighAccuracy:true, timeout:15000, maximumAge:0});
+  });
+
+  // Popup buttons (edit / delete)
+  document.addEventListener('click', function(e){
+    var b = e.target.closest && e.target.closest('button[data-act]');
+    if(!b) return;
+    var w = waypoints.filter(function(x){ return x.id === b.dataset.id; })[0];
+    if(!w) return;
+    if(b.dataset.act === 'edit'){
+      askName({title:'Edit waypoint name', lat:w.lat, lng:w.lng, value:w.name}).then(function(name){
+        if(!name) return;
+        w.name = name; save();
+        markers[w.id].setPopupContent(popupHtml(w)); markers[w.id].options.title = name;
+        renderList(); setActive(w.id);
+      });
+    } else {
+      confirmDelete(w).then(function(ok){
+        if(!ok) return;
+        map.removeLayer(markers[w.id]); delete markers[w.id];
+        waypoints = waypoints.filter(function(x){ return x.id !== w.id; });
+        save(); renderList(); toast('Waypoint deleted.');
+      });
+    }
+  });
+
+  // Initial render
+  waypoints.forEach(addMarker);
+  renderList();
+  if(waypoints.length){
+    var b = L.latLngBounds(waypoints.map(function(w){ return [w.lat, w.lng]; }));
+    map.fitBounds(b, {padding:[60,60], maxZoom:16});
+  }
+})();
+</script>
+</body>
+</html>
