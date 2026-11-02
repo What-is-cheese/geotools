@@ -1,3 +1,2 @@
-[Bearing and Distance Navigator](Bearing-and-Distance-Navigator.html)
+[GeoTool](Geotoolmain.html)
 
-# Also a test
