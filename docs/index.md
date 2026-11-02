@@ -1,2 +1,2 @@
-[GeoTool](waypoints (1).html)
+[GeoTool](waypoints.html)
 
