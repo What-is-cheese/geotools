@@ -45,12 +45,21 @@ aside h2{font-size:.95rem;margin:0;padding:14px 16px;border-bottom:1px solid var
 .pin{width:30px;height:30px;transform:translate(-50%,-100%)}
 .pin span{display:block;width:26px;height:26px;margin:2px;background:var(--pin);border:3px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 3px 8px rgba(0,0,0,.4)}
 .pin span::after{content:"";position:absolute;left:50%;top:50%;width:8px;height:8px;margin:-4px 0 0 -4px;background:#fff;border-radius:50%}
-.leaflet-popup-content{margin:14px 16px;font-family:inherit;color:#0f2e3a;min-width:190px}
+.leaflet-popup-content{margin:14px 16px;font-family:inherit;color:#0f2e3a;min-width:220px}
 .pop h3{margin:0 0 6px;font-size:1rem;word-break:break-word}
 .pop p{margin:2px 0;font-size:.85rem;font-variant-numeric:tabular-nums;color:#41606b}
 .pop .row{display:flex;gap:8px;margin-top:12px}
 .pop button{flex:1;padding:7px 10px;border-radius:8px;border:1px solid #c9d6d3;background:#f4f7f6;color:#0f2e3a;font-weight:600}
 .pop button.del{color:#b3261e;border-color:#e6c3c0}
+/* connect-from feature */
+.pop button.mk{width:100%;margin-top:8px;background:#0f2e3a;color:#fff;border-color:#0f2e3a;flex:none}
+.pop .rel{margin-top:6px;padding-top:6px;border-top:1px solid #dde7e5}
+.seg-label{background:#fff;color:#0f2e3a;border:1px solid #f2542d;border-radius:6px;font-weight:650;font-size:.75rem;padding:2px 7px;box-shadow:none}
+.seg-label::before{display:none}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.coords:empty{display:none}
+.err{color:var(--danger);font-size:.88rem;min-height:1.2em}
+#fromDlg{width:min(92vw,440px)}
 /* dialog */
 dialog{border:0;border-radius:16px;padding:0;background:var(--panel);color:var(--ink);width:min(92vw,400px);box-shadow:0 20px 60px rgba(0,0,0,.35)}
 dialog::backdrop{background:rgba(5,20,26,.55)}
@@ -97,6 +106,23 @@ dialog input{width:100%;padding:12px;font:inherit;border:1px solid var(--line);b
     <div class="actions">
       <button type="button" class="ghost" id="nameCancel">Cancel</button>
       <button class="primary" value="ok">Save waypoint</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="fromDlg">
+  <form id="fromForm" novalidate>
+    <h3 id="fromTitle">New point from waypoint</h3>
+    <div class="coords" id="fromOrigin"></div>
+    <div class="two">
+      <div><label for="fDist">Distance (meters)</label><input id="fDist" inputmode="decimal" autocomplete="off" placeholder="e.g. 125.75"></div>
+      <div><label for="fBrg">Direction (degrees, 0–360)</label><input id="fBrg" inputmode="decimal" autocomplete="off" placeholder="0 = N, 90 = E"></div>
+    </div>
+    <div><label for="fName">New waypoint name</label><input id="fName" maxlength="80" autocomplete="off"></div>
+    <div class="coords" id="fPrev" aria-live="polite"></div>
+    <div class="err" id="fErr" role="alert"></div>
+    <div class="actions">
+      <button type="button" class="ghost" id="fCancel">Cancel</button>
+      <button type="submit" class="primary">Create Waypoint</button>
     </div>
   </form>
 </dialog>
@@ -149,12 +175,90 @@ dialog input{width:100%;padding:12px;font:inherit;border:1px solid var(--line);b
 
   var icon = L.divIcon({className:'', html:'<div class="pin"><span></span></div>', iconSize:[0,0]});
 
+  // GEO-START
+  var WGS84 = {a:6378137, f:1/298.257223563};
+  function normBearing(b){ return ((b % 360) + 360) % 360; }
+  function normLng(l){ return (((l + 540) % 360) + 360) % 360 - 180; }
+  // Vincenty direct solution on the WGS-84 ellipsoid: start point, initial bearing (deg clockwise from north), distance (m)
+  function destination(lat, lng, bearing, dist){
+    var a = WGS84.a, f = WGS84.f, b = (1-f)*a, rad = Math.PI/180;
+    var phi1 = Math.max(-89.999999999, Math.min(89.999999999, lat)) * rad, al1 = normBearing(bearing) * rad;
+    var sA = Math.sin(al1), cA = Math.cos(al1);
+    var tU1 = (1-f)*Math.tan(phi1), cU1 = 1/Math.sqrt(1+tU1*tU1), sU1 = tU1*cU1;
+    var s1 = Math.atan2(tU1, cA), sAl = cU1*sA, cSqAl = 1 - sAl*sAl, uSq = cSqAl*(a*a-b*b)/(b*b);
+    var A = 1 + uSq/16384*(4096+uSq*(-768+uSq*(320-175*uSq)));
+    var B = uSq/1024*(256+uSq*(-128+uSq*(74-47*uSq)));
+    var sig = dist/(b*A), sigP, sS, cS, c2, dS, i = 0;
+    do {
+      c2 = Math.cos(2*s1+sig); sS = Math.sin(sig); cS = Math.cos(sig);
+      dS = B*sS*(c2+B/4*(cS*(-1+2*c2*c2)-B/6*c2*(-3+4*sS*sS)*(-3+4*c2*c2)));
+      sigP = sig; sig = dist/(b*A) + dS;
+    } while(Math.abs(sig-sigP) > 1e-12 && ++i < 100);
+    var x = sU1*sS - cU1*cS*cA;
+    var phi2 = Math.atan2(sU1*cS + cU1*sS*cA, (1-f)*Math.sqrt(sAl*sAl + x*x));
+    var lam = Math.atan2(sS*sA, cU1*cS - sU1*sS*cA);
+    var C = f/16*cSqAl*(4+f*(4-3*cSqAl));
+    var Ld = lam - (1-C)*f*sAl*(sig + C*sS*(c2+C*cS*(-1+2*c2*c2)));
+    return {lat: phi2/rad, lng: normLng(lng + Ld/rad)};
+  }
+  // GEO-END
+  var MAX_DIST = 20003931; // about half of Earth's circumference, in meters
+
+  function byId(id){ return waypoints.filter(function(x){ return x.id === id; })[0]; }
+  function newId(){ return 'w'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
+  function compass(b){ return ['N','NE','E','SE','S','SW','W','NW'][Math.round(b/45) % 8]; }
+  function fmtDist(m){
+    var s = Number(m.toFixed(2)).toLocaleString([], {maximumFractionDigits:2}) + ' m';
+    return m >= 1000 ? s + ' (' + Number((m/1000).toFixed(3)) + ' km)' : s;
+  }
+  function fmtBrg(b){ return Number(b.toFixed(2)) + '° ' + compass(b); }
+  function relText(w){
+    var p = w.parent && byId(w.parent);
+    return p ? fmtDist(w.distance) + ' at ' + fmtBrg(w.bearing) + ' from ' + p.name : '';
+  }
+
   function popupHtml(w){
+    var rel = relText(w);
     return '<div class="pop"><h3>'+esc(w.name)+'</h3>'+
       '<p>Latitude: '+fmtCoord(w.lat)+'</p><p>Longitude: '+fmtCoord(w.lng)+'</p>'+
       '<p>Created: '+esc(fmtDate(w.created))+'</p>'+
+      (rel ? '<p class="rel">'+esc(rel)+'</p>' : '')+
+      '<button class="mk" data-act="from" data-id="'+w.id+'">Create Point From This Waypoint</button>'+
       '<div class="row"><button data-act="edit" data-id="'+w.id+'">Edit name</button>'+
       '<button class="del" data-act="del" data-id="'+w.id+'">Delete</button></div></div>';
+  }
+  function refreshPopups(){
+    waypoints.forEach(function(w){ if(markers[w.id]) markers[w.id].setPopupContent(popupHtml(w)); });
+  }
+
+  // Connecting lines (one per derived waypoint, drawn along the geodesic)
+  var lines = {};
+  function removeLine(id){ if(lines[id]){ map.removeLayer(lines[id]); delete lines[id]; } }
+  function linePoints(p, w){
+    var n = Math.min(64, Math.max(1, Math.ceil(w.distance/50000)));
+    var pts = [[p.lat, p.lng]], prev = p.lng;
+    for(var i = 1; i <= n; i++){
+      var q = i === n ? {lat:w.lat, lng:w.lng} : destination(p.lat, p.lng, w.bearing, w.distance*i/n);
+      var lng = q.lng;
+      while(lng - prev > 180) lng -= 360;
+      while(lng - prev < -180) lng += 360;
+      pts.push([q.lat, lng]); prev = lng;
+    }
+    return pts;
+  }
+  function drawLine(w){
+    var p = w.parent && byId(w.parent);
+    removeLine(w.id);
+    if(!p) return;
+    var l = L.polyline(linePoints(p, w), {color:'#f2542d', weight:3, dashArray:'8 6', opacity:.9}).addTo(map);
+    l.bindTooltip(Number(w.distance.toFixed(2)) + ' m · ' + Number(w.bearing.toFixed(2)) + '°',
+      {permanent:true, direction:'center', className:'seg-label'});
+    l.bindPopup(function(){
+      var from = byId(w.parent);
+      return '<div class="pop"><h3>Distance and bearing</h3><p>From: '+esc(from ? from.name : '')+'</p><p>To: '+esc(w.name)+
+        '</p><p>Distance: '+esc(fmtDist(w.distance))+'</p><p>Bearing: '+esc(fmtBrg(w.bearing))+'</p></div>';
+    });
+    lines[w.id] = l;
   }
 
   function addMarker(w){
@@ -182,7 +286,7 @@ dialog input{width:100%;padding:12px;font:inherit;border:1px solid var(--line);b
       var li = document.createElement('li');
       li.className = 'item'; li.tabIndex = 0; li.dataset.id = w.id;
       li.innerHTML = '<span class="dot"></span><div><b>'+esc(w.name)+'</b><small>'+
-        fmtCoord(w.lat)+', '+fmtCoord(w.lng)+'</small><small>'+esc(fmtDate(w.created))+'</small></div>';
+        fmtCoord(w.lat)+', '+fmtCoord(w.lng)+'</small><small>'+esc(fmtDate(w.created))+'</small>'+(relText(w) ? '<small>'+esc(relText(w))+'</small>' : '')+'</div>';
       li.addEventListener('click', function(){ focusWaypoint(w.id); });
       li.addEventListener('keydown', function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); focusWaypoint(w.id); } });
       listEl.appendChild(li);
@@ -248,7 +352,7 @@ dialog input{width:100%;padding:12px;font:inherit;border:1px solid var(--line);b
       askName({title:'Name this waypoint', lat:lat, lng:lng, value:'Waypoint '+(waypoints.length+1)}).then(function(name){
         if(accuracyCircle){ map.removeLayer(accuracyCircle); accuracyCircle = null; }
         if(!name){ toast('Waypoint not saved.'); return; }
-        var w = {id:'w'+Date.now().toString(36)+Math.random().toString(36).slice(2,6), name:name, lat:lat, lng:lng, created:new Date().toISOString()};
+        var w = {id:newId(), name:name, lat:lat, lng:lng, created:new Date().toISOString()};
         waypoints.push(w); save(); addMarker(w); renderList();
         markers[w.id].openPopup();
         toast('Saved “'+name+'”.');
@@ -267,21 +371,67 @@ dialog input{width:100%;padding:12px;font:inherit;border:1px solid var(--line);b
       askName({title:'Edit waypoint name', lat:w.lat, lng:w.lng, value:w.name}).then(function(name){
         if(!name) return;
         w.name = name; save();
-        markers[w.id].setPopupContent(popupHtml(w)); markers[w.id].options.title = name;
-        renderList(); setActive(w.id);
+        markers[w.id].options.title = name;
+        refreshPopups(); renderList(); setActive(w.id);
       });
+    } else if(b.dataset.act === 'from'){
+      openFrom(w);
     } else {
       confirmDelete(w).then(function(ok){
         if(!ok) return;
         map.removeLayer(markers[w.id]); delete markers[w.id];
+        removeLine(w.id);
+        waypoints.forEach(function(x){ if(x.parent === w.id){ x.parent = null; removeLine(x.id); } });
         waypoints = waypoints.filter(function(x){ return x.id !== w.id; });
-        save(); renderList(); toast('Waypoint deleted.');
+        save(); refreshPopups(); renderList(); toast('Waypoint deleted.');
       });
     }
   });
 
+  // Create point from an existing waypoint (distance + bearing)
+  var fromDlg = $('fromDlg'), fromSrc = null;
+  function num(v){ return parseFloat(String(v).trim().replace(',', '.')); }
+  function readFrom(){
+    var d = num($('fDist').value), b = num($('fBrg').value);
+    if(!(d > 0)) return {err:'Enter a distance greater than 0 meters.'};
+    if(d > MAX_DIST) return {err:'Distance can be at most 20,003,931 m (half way around the Earth).'};
+    if(!isFinite(b)) return {err:'Enter a direction in degrees, 0–360 (0 = north, 90 = east).'};
+    return {d:d, b:normBearing(b)};
+  }
+  function updatePreview(){
+    var r = readFrom(), prev = $('fPrev');
+    if(r.err || !fromSrc){ prev.textContent = ''; return; }
+    var q = destination(fromSrc.lat, fromSrc.lng, r.b, r.d);
+    prev.innerHTML = 'New point at '+fmtCoord(q.lat)+', '+fmtCoord(q.lng)+'<br>Bearing '+esc(fmtBrg(r.b));
+    $('fErr').textContent = '';
+  }
+  function openFrom(w){
+    fromSrc = w;
+    $('fromTitle').textContent = 'New point from “' + w.name + '”';
+    $('fromOrigin').innerHTML = 'Origin: '+fmtCoord(w.lat)+', '+fmtCoord(w.lng);
+    $('fDist').value = ''; $('fBrg').value = ''; $('fName').value = 'Waypoint ' + (waypoints.length + 1);
+    $('fErr').textContent = ''; $('fPrev').textContent = '';
+    map.closePopup(); fromDlg.showModal(); $('fDist').focus();
+  }
+  ['fDist','fBrg'].forEach(function(id){ $(id).addEventListener('input', updatePreview); });
+  $('fCancel').addEventListener('click', function(){ fromDlg.close(); });
+  $('fromForm').addEventListener('submit', function(e){
+    e.preventDefault();
+    var r = readFrom(); if(r.err){ $('fErr').textContent = r.err; return; }
+    var name = $('fName').value.trim(); if(!name){ $('fErr').textContent = 'Enter a name for the new waypoint.'; return; }
+    var q = destination(fromSrc.lat, fromSrc.lng, r.b, r.d);
+    var w = {id:newId(), name:name, lat:q.lat, lng:q.lng, created:new Date().toISOString(),
+             parent:fromSrc.id, distance:r.d, bearing:r.b};
+    waypoints.push(w); save(); addMarker(w); drawLine(w); renderList();
+    fromDlg.close();
+    map.fitBounds(lines[w.id].getBounds(), {padding:[90,90], maxZoom:19, animate:false});
+    markers[w.id].openPopup();
+    toast('Saved “'+name+'”.');
+  });
+
   // Initial render
   waypoints.forEach(addMarker);
+  waypoints.forEach(drawLine);
   renderList();
   if(waypoints.length){
     var b = L.latLngBounds(waypoints.map(function(w){ return [w.lat, w.lng]; }));
