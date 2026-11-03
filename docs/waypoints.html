@@ -3,185 +3,93 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Waypoints</title>
+<title>Waypoint Map</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
-:root{
-  --ink:#0f2e3a; --ink-2:#2f4f5b; --paper:#f4f7f6; --panel:#ffffff; --line:#d8e2e0;
-  --brand:#0f2e3a; --brand-text:#ffffff; --pin:#f2542d; --danger:#b3261e; --muted:#5d7580;
-  --radius:12px;
-}
-@media (prefers-color-scheme:dark){
-  :root{--ink:#e6f0ee; --ink-2:#b4c9c6; --paper:#0d1b21; --panel:#14272f; --line:#254049;
-    --brand:#5fd3c0; --brand-text:#06231f; --muted:#8fa9a8; --danger:#ff8a80;}
-}
-*{box-sizing:border-box}
-html,body{height:100%;margin:0}
-body{font-family:"Avenir Next","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;background:var(--paper);color:var(--ink);display:flex;flex-direction:column}
-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 18px;background:var(--panel);border-bottom:1px solid var(--line)}
-h1{font-size:1.15rem;margin:0;letter-spacing:.01em;display:flex;align-items:center;gap:10px}
-h1 svg{width:22px;height:22px;color:var(--pin)}
-button{font:inherit;cursor:pointer}
-button:focus-visible,input:focus-visible,.item:focus-visible{outline:3px solid var(--pin);outline-offset:2px}
-.primary{background:var(--brand);color:var(--brand-text);border:0;border-radius:999px;padding:11px 20px;font-weight:650;display:inline-flex;align-items:center;gap:8px;box-shadow:0 2px 8px rgba(0,0,0,.18)}
-.primary:disabled{opacity:.65;cursor:progress}
-.primary svg{width:18px;height:18px}
-.ghost{background:transparent;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px 14px}
-.ghost:hover{background:var(--paper)}
-main{flex:1;min-height:0;display:grid;grid-template-columns:1fr 340px}
-#map{height:100%;width:100%;min-height:0;background:#cfdcd9}
-aside{display:flex;flex-direction:column;min-height:0;background:var(--panel);border-left:1px solid var(--line)}
-aside h2{font-size:.95rem;margin:0;padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
-.count{color:var(--muted);font-weight:500}
-#list{list-style:none;margin:0;padding:8px;overflow:auto;flex:1}
-.item{padding:10px 12px;border-radius:10px;cursor:pointer;display:flex;gap:12px;align-items:flex-start}
-.item:hover{background:var(--paper)}
-.item.active{background:var(--paper);box-shadow:inset 3px 0 0 var(--pin)}
-.dot{width:12px;height:12px;border-radius:50%;background:var(--pin);margin-top:5px;flex:none}
-.item b{display:block;font-size:.95rem;word-break:break-word}
-.item small{display:block;color:var(--muted);font-variant-numeric:tabular-nums;line-height:1.5}
-.empty{padding:24px 16px;color:var(--muted);line-height:1.5;font-size:.92rem}
-/* map pin */
-.pin{width:30px;height:30px;transform:translate(-50%,-100%)}
-.pin span{display:block;width:26px;height:26px;margin:2px;background:var(--pin);border:3px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 3px 8px rgba(0,0,0,.4)}
-.pin span::after{content:"";position:absolute;left:50%;top:50%;width:8px;height:8px;margin:-4px 0 0 -4px;background:#fff;border-radius:50%}
-.leaflet-popup-content{margin:14px 16px;font-family:inherit;color:#0f2e3a;min-width:220px}
-.pop h3{margin:0 0 6px;font-size:1rem;word-break:break-word}
-.pop p{margin:2px 0;font-size:.85rem;font-variant-numeric:tabular-nums;color:#41606b}
-.pop .row{display:flex;gap:8px;margin-top:12px}
-.pop button{flex:1;padding:7px 10px;border-radius:8px;border:1px solid #c9d6d3;background:#f4f7f6;color:#0f2e3a;font-weight:600}
-.pop button.del{color:#b3261e;border-color:#e6c3c0}
-/* connect-from feature */
-.pop button.mk{width:100%;margin-top:8px;background:#0f2e3a;color:#fff;border-color:#0f2e3a;flex:none}
-.pop .rel{margin-top:6px;padding-top:6px;border-top:1px solid #dde7e5}
-.seg-label{background:#fff;color:#0f2e3a;border:1px solid #f2542d;border-radius:6px;font-weight:650;font-size:.75rem;padding:2px 7px;box-shadow:none}
-.seg-label::before{display:none}
-.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.coords:empty{display:none}
-.err{color:var(--danger);font-size:.88rem;min-height:1.2em}
-#fromDlg{width:min(92vw,440px)}
-/* dialog */
-dialog{border:0;border-radius:16px;padding:0;background:var(--panel);color:var(--ink);width:min(92vw,400px);box-shadow:0 20px 60px rgba(0,0,0,.35)}
-dialog::backdrop{background:rgba(5,20,26,.55)}
-dialog form{padding:22px;display:grid;gap:12px}
-dialog h3{margin:0;font-size:1.1rem}
-dialog label{font-size:.85rem;color:var(--muted)}
-dialog input{width:100%;padding:12px;font:inherit;border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink);margin-top:4px}
-.coords{font-variant-numeric:tabular-nums;color:var(--ink-2);font-size:.9rem;background:var(--paper);padding:10px 12px;border-radius:10px;line-height:1.5}
-.actions{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
-.actions .primary{box-shadow:none;padding:10px 18px}
-.actions .danger{background:var(--danger);color:#fff}
-#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--ink);color:var(--paper);padding:11px 18px;border-radius:10px;font-size:.9rem;max-width:90vw;z-index:2000;opacity:0;pointer-events:none;transition:opacity .2s}
-#toast.show{opacity:1}
-@media (max-width:800px){
-  main{grid-template-columns:1fr;grid-template-rows:minmax(0,3fr) minmax(0,2fr)}
-  aside{border-left:0;border-top:1px solid var(--line)}
-  header{padding:10px 12px}
-  .primary{padding:10px 14px;font-size:.92rem}
-}
-@media (prefers-reduced-motion:reduce){#toast{transition:none}}
+body{background:#fff;color:#000;margin:10px}
+#map{height:420px;max-width:100%;border:1px solid #000;margin:10px 0}
+.pt{width:12px;height:12px;border:2px solid #000;border-radius:50%}
+.pt.sel{outline:2px solid #000;outline-offset:2px}
+.me{width:14px;height:14px;background:#0ff;border:2px solid #000}
+.sw{display:inline-block;width:12px;height:12px;border:1px solid #000;vertical-align:middle}
+.err{color:#c00}
+input[type=text]{max-width:100%}
+form{margin:10px 0}
 </style>
 </head>
 <body>
-<header>
-  <h1><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z"/></svg>Waypoints</h1>
-  <button class="primary" id="create">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
-    <span id="createLabel">Create Point From Location</span>
-  </button>
-</header>
-<main>
-  <div id="map" role="application" aria-label="Map of saved waypoints"></div>
-  <aside>
-    <h2>Saved waypoints <span class="count" id="count">0</span></h2>
-    <ul id="list"></ul>
-  </aside>
-</main>
+<h1>Waypoint Map</h1>
 
-<dialog id="nameDlg">
-  <form method="dialog" id="nameForm">
-    <h3 id="dlgTitle">Name this waypoint</h3>
-    <div class="coords" id="dlgCoords"></div>
-    <div><label for="nameInput">Waypoint name</label><input id="nameInput" maxlength="80" autocomplete="off" required></div>
-    <div class="actions">
-      <button type="button" class="ghost" id="nameCancel">Cancel</button>
-      <button class="primary" value="ok">Save waypoint</button>
-    </div>
-  </form>
-</dialog>
-<dialog id="fromDlg">
-  <form id="fromForm" novalidate>
-    <h3 id="fromTitle">New point from waypoint</h3>
-    <div class="coords" id="fromOrigin"></div>
-    <div class="two">
-      <div><label for="fDist">Distance (meters)</label><input id="fDist" inputmode="decimal" autocomplete="off" placeholder="e.g. 125.75"></div>
-      <div><label for="fBrg">Direction (degrees, 0–360)</label><input id="fBrg" inputmode="decimal" autocomplete="off" placeholder="0 = N, 90 = E"></div>
-    </div>
-    <div><label for="fName">New waypoint name</label><input id="fName" maxlength="80" autocomplete="off"></div>
-    <div class="coords" id="fPrev" aria-live="polite"></div>
-    <div class="err" id="fErr" role="alert"></div>
-    <div class="actions">
-      <button type="button" class="ghost" id="fCancel">Cancel</button>
-      <button type="submit" class="primary">Create Waypoint</button>
-    </div>
-  </form>
-</dialog>
-<dialog id="delDlg">
-  <form method="dialog">
-    <h3>Delete this waypoint?</h3>
-    <div class="coords" id="delName"></div>
-    <div class="actions">
-      <button type="button" class="ghost" id="delCancel">Keep it</button>
-      <button class="primary danger" value="ok">Delete waypoint</button>
-    </div>
-  </form>
-</dialog>
-<div id="toast" role="status" aria-live="polite"></div>
+<button type="button" id="gpsBtn">Create Point From Location</button>
+<p id="msg" class="err" role="alert"></p>
+
+<form id="gpsForm" hidden>
+  <p id="gpsCoords"></p>
+  <p><label>Name (required): <input type="text" id="gpsName" maxlength="80" autocomplete="off"></label></p>
+  <p><label>Color: <select id="gpsColor"></select></label></p>
+  <button type="submit">Create Waypoint</button>
+  <button type="button" id="gpsCancel">Cancel</button>
+  <span class="err" id="gpsErr" role="alert"></span>
+</form>
+
+<div id="map"></div>
+
+<h2>Selected waypoint</h2>
+<div id="selInfo"></div>
+
+<form id="fromForm" hidden>
+  <p><label>Name (required): <input type="text" id="fName" maxlength="80" autocomplete="off"></label></p>
+  <p><label>Distance (meters): <input type="text" id="fDist" inputmode="decimal" autocomplete="off"></label></p>
+  <p><label>Direction (degrees): <input type="text" id="fBrg" inputmode="decimal" autocomplete="off"></label> 0 = North, 90 = East, 180 = South, 270 = West</p>
+  <p><label>Color: <select id="fColor"></select></label></p>
+  <button type="submit">Create Waypoint</button>
+  <button type="button" id="fCancel">Cancel</button>
+  <span class="err" id="fErr" role="alert"></span>
+</form>
+
+<form id="editForm" hidden>
+  <p><label>Name: <input type="text" id="eName" maxlength="80" autocomplete="off"></label></p>
+  <button type="submit">Save name</button>
+  <button type="button" id="eCancel">Cancel</button>
+  <span class="err" id="eErr" role="alert"></span>
+</form>
+
+<form id="colorForm" hidden>
+  <p><label>Color: <select id="cColor"></select></label></p>
+  <button type="submit">Save color</button>
+  <button type="button" id="cCancel">Cancel</button>
+</form>
+
+<h2>Waypoints (<span id="count">0</span>)</h2>
+<ul id="list"></ul>
+
+<h2>Route</h2>
+<p><label>Travel mode: <select id="rMode"><option value="car">Driving</option><option value="bike">Cycling</option><option value="foot">Walking</option></select></label></p>
+<div id="rPlan"></div>
+<p>
+  <button type="button" id="rCreate">Create Route</button>
+  <button type="button" id="rStart">Start Navigation</button>
+  <button type="button" id="rStop">Stop Navigation</button>
+  <button type="button" id="rRecalc">Recalculate Route</button>
+  <button type="button" id="rClear">Clear Route</button>
+</p>
+<p id="rErr" class="err" role="alert"></p>
+<div id="rInfo"></div>
+<div id="navInfo"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 (function(){
-  var KEY = 'waypoints.v1';
-  var waypoints = load();
-  var markers = {};
-  var accuracyCircle = null;
-
-  var map = L.map('map', {zoomControl:true}).setView([20, 0], 2);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-  }).addTo(map);
-
+  var KEY = 'waypoint-map.basic.v1';
+  var MAX_DIST = 20003931; // about half of Earth's circumference, in meters
   var $ = function(id){ return document.getElementById(id); };
-  var listEl = $('list'), btn = $('create'), label = $('createLabel');
 
-  function load(){
-    try { var d = JSON.parse(localStorage.getItem(KEY)); return Array.isArray(d) ? d : []; }
-    catch(e){ return []; }
-  }
-  function save(){
-    try { localStorage.setItem(KEY, JSON.stringify(waypoints)); }
-    catch(e){ toast('Could not save. Browser storage is unavailable.'); }
-  }
-  function esc(s){ return String(s).replace(/[&<>"']/g, function(c){
-    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
-  function fmtCoord(n){ return Number(n).toFixed(6); }
-  function fmtDate(iso){ return new Date(iso).toLocaleString([], {dateStyle:'medium', timeStyle:'short'}); }
-  var toastTimer;
-  function toast(msg){
-    var t = $('toast'); t.textContent = msg; t.classList.add('show');
-    clearTimeout(toastTimer); toastTimer = setTimeout(function(){ t.classList.remove('show'); }, 4200);
-  }
-
-  var icon = L.divIcon({className:'', html:'<div class="pin"><span></span></div>', iconSize:[0,0]});
-
-  // GEO-START
-  var WGS84 = {a:6378137, f:1/298.257223563};
+  // ---- Geodesy: Vincenty direct solution on the WGS-84 ellipsoid.
+  // Inputs: start lat/lng (degrees), bearing (degrees clockwise from north), distance (meters).
   function normBearing(b){ return ((b % 360) + 360) % 360; }
   function normLng(l){ return (((l + 540) % 360) + 360) % 360 - 180; }
-  // Vincenty direct solution on the WGS-84 ellipsoid: start point, initial bearing (deg clockwise from north), distance (m)
   function destination(lat, lng, bearing, dist){
-    var a = WGS84.a, f = WGS84.f, b = (1-f)*a, rad = Math.PI/180;
+    var a = 6378137, f = 1/298.257223563, b = (1-f)*a, rad = Math.PI/180;
     var phi1 = Math.max(-89.999999999, Math.min(89.999999999, lat)) * rad, al1 = normBearing(bearing) * rad;
     var sA = Math.sin(al1), cA = Math.cos(al1);
     var tU1 = (1-f)*Math.tan(phi1), cU1 = 1/Math.sqrt(1+tU1*tU1), sU1 = tU1*cU1;
@@ -201,241 +109,462 @@ dialog input{width:100%;padding:12px;font:inherit;border:1px solid var(--line);b
     var Ld = lam - (1-C)*f*sAl*(sig + C*sS*(c2+C*cS*(-1+2*c2*c2)));
     return {lat: phi2/rad, lng: normLng(lng + Ld/rad)};
   }
-  // GEO-END
-  var MAX_DIST = 20003931; // about half of Earth's circumference, in meters
 
-  function byId(id){ return waypoints.filter(function(x){ return x.id === id; })[0]; }
-  function newId(){ return 'w'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
-  function compass(b){ return ['N','NE','E','SE','S','SW','W','NW'][Math.round(b/45) % 8]; }
-  function fmtDist(m){
-    var s = Number(m.toFixed(2)).toLocaleString([], {maximumFractionDigits:2}) + ' m';
-    return m >= 1000 ? s + ' (' + Number((m/1000).toFixed(3)) + ' km)' : s;
+  // ---- Storage. Waypoints hold only id, name, lat, lng. Lines are kept as separate from/to pairs.
+  function load(){
+    try {
+      var d = JSON.parse(localStorage.getItem(KEY));
+      if(d && Array.isArray(d.points) && Array.isArray(d.links)){ d.route = d.route || {}; return d; }
+    } catch(e){}
+    return {points:[], links:[], route:{}};
   }
-  function fmtBrg(b){ return Number(b.toFixed(2)) + '° ' + compass(b); }
-  function relText(w){
-    var p = w.parent && byId(w.parent);
-    return p ? fmtDist(w.distance) + ' at ' + fmtBrg(w.bearing) + ' from ' + p.name : '';
-  }
-
-  function popupHtml(w){
-    var rel = relText(w);
-    return '<div class="pop"><h3>'+esc(w.name)+'</h3>'+
-      '<p>Latitude: '+fmtCoord(w.lat)+'</p><p>Longitude: '+fmtCoord(w.lng)+'</p>'+
-      '<p>Created: '+esc(fmtDate(w.created))+'</p>'+
-      (rel ? '<p class="rel">'+esc(rel)+'</p>' : '')+
-      '<button class="mk" data-act="from" data-id="'+w.id+'">Create Point From This Waypoint</button>'+
-      '<div class="row"><button data-act="edit" data-id="'+w.id+'">Edit name</button>'+
-      '<button class="del" data-act="del" data-id="'+w.id+'">Delete</button></div></div>';
-  }
-  function refreshPopups(){
-    waypoints.forEach(function(w){ if(markers[w.id]) markers[w.id].setPopupContent(popupHtml(w)); });
+  var data = load();
+  var plan = data.route;
+  function save(){
+    try { localStorage.setItem(KEY, JSON.stringify(data)); }
+    catch(e){ say('Could not save. Browser storage is unavailable.'); }
   }
 
-  // Connecting lines (one per derived waypoint, drawn along the geodesic)
-  var lines = {};
-  function removeLine(id){ if(lines[id]){ map.removeLayer(lines[id]); delete lines[id]; } }
-  function linePoints(p, w){
-    var n = Math.min(64, Math.max(1, Math.ceil(w.distance/50000)));
-    var pts = [[p.lat, p.lng]], prev = p.lng;
-    for(var i = 1; i <= n; i++){
-      var q = i === n ? {lat:w.lat, lng:w.lng} : destination(p.lat, p.lng, w.bearing, w.distance*i/n);
-      var lng = q.lng;
-      while(lng - prev > 180) lng -= 360;
-      while(lng - prev < -180) lng += 360;
-      pts.push([q.lat, lng]); prev = lng;
+  // ---- Helpers
+  var selectedId = null, markers = {}, lineLayers = [], gpsPos = null;
+  function byId(id){ return data.points.filter(function(p){ return p.id === id; })[0]; }
+  function newId(){ return 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+  function fmt(n){ return Number(n).toFixed(6); }
+  function esc(s){ return String(s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function say(t){ $('msg').textContent = t || ''; }
+  function num(v){ return parseFloat(String(v).trim().replace(',', '.')); }
+  function hideForms(){
+    ['gpsForm','fromForm','editForm','colorForm'].forEach(function(id){ $(id).hidden = true; });
+    ['gpsErr','fErr','eErr'].forEach(function(id){ $(id).textContent = ''; });
+  }
+
+  // ---- Map
+  var map = L.map('map').setView([20, 0], 2);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }).addTo(map);
+  var COLORS = {red:'#ff0000', blue:'#0000ff', green:'#008000', yellow:'#ffff00', orange:'#ffa500', purple:'#800080', black:'#000000', white:'#ffffff'};
+  function hex(p){ return COLORS[p.color] || COLORS.red; }
+  function icon(p, sel){
+    return L.divIcon({className:'', html:'<div class="pt'+(sel ? ' sel' : '')+'" style="background:'+hex(p)+'"></div>',
+      iconSize:[16,16], iconAnchor:[8,8], popupAnchor:[0,-8]});
+  }
+  var meIcon = L.divIcon({className:'', html:'<div class="me"></div>', iconSize:[18,18], iconAnchor:[9,9]});
+  function fillColors(sel){
+    Object.keys(COLORS).forEach(function(k){
+      var o = document.createElement('option'); o.value = k; o.textContent = k.charAt(0).toUpperCase() + k.slice(1); sel.appendChild(o);
+    });
+    sel.value = 'red';
+  }
+
+  function popupText(p){ return '<b>'+esc(p.name)+'</b><br>Latitude: '+fmt(p.lat)+'<br>Longitude: '+fmt(p.lng); }
+  function addMarker(p){
+    var m = L.marker([p.lat, p.lng], {icon:icon(p, false), title:p.name}).addTo(map);
+    m.bindPopup(popupText(p));
+    m.on('click', function(){ select(p.id, false); });
+    markers[p.id] = m;
+  }
+  function drawLines(){
+    lineLayers.forEach(function(l){ map.removeLayer(l); });
+    lineLayers = [];
+    data.links.forEach(function(k){
+      var a = byId(k.from), b = byId(k.to);
+      if(!a || !b) return;
+      var lng2 = b.lng;                       // keep the line short across the date line
+      while(lng2 - a.lng > 180) lng2 -= 360;
+      while(lng2 - a.lng < -180) lng2 += 360;
+      lineLayers.push(L.polyline([[a.lat, a.lng], [b.lat, lng2]], {color:'#000', weight:2}).addTo(map));
+    });
+  }
+
+  // ---- Selection and rendering
+  function select(id, locate){
+    hideForms();
+    selectedId = id;
+    Object.keys(markers).forEach(function(k){ markers[k].setIcon(icon(byId(k), k === id)); });
+    renderList(); renderSelected(); renderPlan();
+    if(locate && id && markers[id]){
+      var p = byId(id);
+      map.setView([p.lat, p.lng], Math.max(map.getZoom(), 17));
+      markers[id].openPopup();
     }
-    return pts;
-  }
-  function drawLine(w){
-    var p = w.parent && byId(w.parent);
-    removeLine(w.id);
-    if(!p) return;
-    var l = L.polyline(linePoints(p, w), {color:'#f2542d', weight:3, dashArray:'8 6', opacity:.9}).addTo(map);
-    l.bindTooltip(Number(w.distance.toFixed(2)) + ' m · ' + Number(w.bearing.toFixed(2)) + '°',
-      {permanent:true, direction:'center', className:'seg-label'});
-    l.bindPopup(function(){
-      var from = byId(w.parent);
-      return '<div class="pop"><h3>Distance and bearing</h3><p>From: '+esc(from ? from.name : '')+'</p><p>To: '+esc(w.name)+
-        '</p><p>Distance: '+esc(fmtDist(w.distance))+'</p><p>Bearing: '+esc(fmtBrg(w.bearing))+'</p></div>';
-    });
-    lines[w.id] = l;
   }
 
-  function addMarker(w){
-    var m = L.marker([w.lat, w.lng], {icon:icon, title:w.name}).addTo(map);
-    m.bindPopup(popupHtml(w), {offset:[0,-34]});
-    m.on('popupopen', function(){ setActive(w.id); });
-    m.on('popupclose', function(){ setActive(null); });
-    markers[w.id] = m;
+  function button(label, fn){
+    var b = document.createElement('button'); b.type = 'button'; b.textContent = label;
+    b.addEventListener('click', fn); return b;
   }
 
-  function setActive(id){
-    Array.prototype.forEach.call(listEl.children, function(li){
-      li.classList.toggle('active', li.dataset.id === id);
-    });
+  function renderSelected(){
+    var box = $('selInfo'); box.innerHTML = '';
+    var p = selectedId && byId(selectedId);
+    if(!p){ box.textContent = 'No waypoint selected.'; return; }
+    var info = document.createElement('p');
+    info.innerHTML = 'Name: '+esc(p.name)+'<br>Latitude: '+fmt(p.lat)+'<br>Longitude: '+fmt(p.lng)+'<br>Color: '+esc(p.color)+' <span class="sw" style="background:'+hex(p)+'"></span>';
+    box.appendChild(info);
+    box.appendChild(button('Create Point From This Waypoint', function(){
+      hideForms(); $('fName').value = ''; $('fDist').value = ''; $('fBrg').value = ''; $('fColor').value = 'red';
+      $('fromForm').hidden = false; $('fName').focus();
+    }));
+    box.appendChild(document.createTextNode(' '));
+    box.appendChild(button('Edit name', function(){
+      hideForms(); $('eName').value = p.name; $('editForm').hidden = false; $('eName').focus();
+    }));
+    box.appendChild(document.createTextNode(' '));
+    box.appendChild(button('Change color', function(){
+      hideForms(); $('cColor').value = p.color; $('colorForm').hidden = false; $('cColor').focus();
+    }));
+    box.appendChild(document.createTextNode(' '));
+    box.appendChild(button('Delete', function(){
+      if(!confirm('Delete waypoint "' + p.name + '"?')) return;
+      data.points = data.points.filter(function(x){ return x.id !== p.id; });
+      data.links = data.links.filter(function(k){ return k.from !== p.id && k.to !== p.id; });
+      map.removeLayer(markers[p.id]); delete markers[p.id];
+      purgeFromPlan(p.id); save(); drawLines(); select(null, false);
+    }));
   }
 
   function renderList(){
-    $('count').textContent = waypoints.length;
-    if(!waypoints.length){
-      listEl.innerHTML = '<li class="empty">No waypoints yet. Press “Create Point From Location” to save where you are right now.</li>';
-      return;
-    }
-    listEl.innerHTML = '';
-    waypoints.slice().reverse().forEach(function(w){
+    $('count').textContent = data.points.length;
+    var ul = $('list'); ul.innerHTML = '';
+    if(!data.points.length){ ul.innerHTML = '<li>No waypoints yet.</li>'; return; }
+    data.points.forEach(function(p){
       var li = document.createElement('li');
-      li.className = 'item'; li.tabIndex = 0; li.dataset.id = w.id;
-      li.innerHTML = '<span class="dot"></span><div><b>'+esc(w.name)+'</b><small>'+
-        fmtCoord(w.lat)+', '+fmtCoord(w.lng)+'</small><small>'+esc(fmtDate(w.created))+'</small>'+(relText(w) ? '<small>'+esc(relText(w))+'</small>' : '')+'</div>';
-      li.addEventListener('click', function(){ focusWaypoint(w.id); });
-      li.addEventListener('keydown', function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); focusWaypoint(w.id); } });
-      listEl.appendChild(li);
+      var sw = document.createElement('span'); sw.className = 'sw'; sw.style.background = hex(p); sw.title = p.color;
+      li.appendChild(sw); li.appendChild(document.createTextNode(' '));
+      var b = button(p.name, function(){ select(p.id, true); });
+      if(p.id === selectedId) b.style.fontWeight = 'bold';
+      li.appendChild(b);
+      li.appendChild(document.createTextNode(' ' + fmt(p.lat) + ', ' + fmt(p.lng)));
+      ul.appendChild(li);
     });
   }
 
-  function focusWaypoint(id){
-    var m = markers[id]; if(!m) return;
-    map.flyTo(m.getLatLng(), 17, {duration:1.2});
-    map.once('moveend', function(){ m.openPopup(); });
-    window.scrollTo(0,0);
-  }
-
-  function askName(opts){
-    return new Promise(function(resolve){
-      var dlg = $('nameDlg'), input = $('nameInput');
-      $('dlgTitle').textContent = opts.title;
-      $('dlgCoords').innerHTML = 'Latitude: '+fmtCoord(opts.lat)+'<br>Longitude: '+fmtCoord(opts.lng);
-      input.value = opts.value;
-      var done = false;
-      function finish(v){ if(done) return; done = true; dlg.removeEventListener('close', onClose); resolve(v); }
-      function onClose(){ var v = input.value.trim(); finish(dlg.returnValue === 'ok' && v ? v : null); }
-      dlg.addEventListener('close', onClose);
-      dlg.returnValue = '';
-      dlg.showModal(); input.focus(); input.select();
-    });
-  }
-  $('nameCancel').addEventListener('click', function(){ $('nameDlg').close('cancel'); });
-  $('delCancel').addEventListener('click', function(){ $('delDlg').close('cancel'); });
-
-  function confirmDelete(w){
-    return new Promise(function(resolve){
-      var dlg = $('delDlg'); $('delName').textContent = w.name; dlg.returnValue = '';
-      dlg.addEventListener('close', function h(){ dlg.removeEventListener('close', h); resolve(dlg.returnValue === 'ok'); });
-      dlg.showModal();
-    });
-  }
-
-  function setBusy(b){
-    btn.disabled = b;
-    label.textContent = b ? 'Finding your location…' : 'Create Point From Location';
-  }
-
-  function geoError(err){
-    var msg = 'Could not get your location.';
-    if(err.code === 1) msg = 'Location permission was denied. Allow location access for this site in your browser settings, then try again.';
-    else if(err.code === 2) msg = 'Your position is unavailable right now. Check that GPS or location services are on.';
-    else if(err.code === 3) msg = 'Finding your location timed out. Try again with a clearer signal.';
-    toast(msg);
-  }
-
-  // The browser shows its own permission prompt the first time this is called.
-  btn.addEventListener('click', function(){
-    if(!('geolocation' in navigator)){ toast('This browser does not support location access.'); return; }
-    if(!window.isSecureContext){ toast('Location needs a secure page (HTTPS or localhost).'); return; }
-    setBusy(true);
+  // ---- Create Point From Location
+  // The browser asks for permission the first time getCurrentPosition is called.
+  $('gpsBtn').addEventListener('click', function(){
+    say(''); hideForms();
+    if(!('geolocation' in navigator)){ say('This browser does not support location access.'); return; }
+    if(!window.isSecureContext){ say('Location access needs a secure page (HTTPS or localhost).'); return; }
+    var btn = $('gpsBtn'); btn.disabled = true; say('Getting your location...');
     navigator.geolocation.getCurrentPosition(function(pos){
-      setBusy(false);
-      var lat = pos.coords.latitude, lng = pos.coords.longitude, acc = pos.coords.accuracy;
-      if(accuracyCircle) map.removeLayer(accuracyCircle);
-      accuracyCircle = L.circle([lat,lng], {radius:acc, color:'#f2542d', weight:1, fillOpacity:.1}).addTo(map);
-      map.flyTo([lat,lng], 17, {duration:1.2});
-      askName({title:'Name this waypoint', lat:lat, lng:lng, value:'Waypoint '+(waypoints.length+1)}).then(function(name){
-        if(accuracyCircle){ map.removeLayer(accuracyCircle); accuracyCircle = null; }
-        if(!name){ toast('Waypoint not saved.'); return; }
-        var w = {id:newId(), name:name, lat:lat, lng:lng, created:new Date().toISOString()};
-        waypoints.push(w); save(); addMarker(w); renderList();
-        markers[w.id].openPopup();
-        toast('Saved “'+name+'”.');
-      });
-    }, function(err){ setBusy(false); geoError(err); },
-    {enableHighAccuracy:true, timeout:15000, maximumAge:0});
+      btn.disabled = false; say('');
+      gpsPos = {lat: pos.coords.latitude, lng: pos.coords.longitude};
+      $('gpsCoords').textContent = 'Your location: ' + fmt(gpsPos.lat) + ', ' + fmt(gpsPos.lng);
+      $('gpsName').value = ''; $('gpsColor').value = 'red';
+      map.setView([gpsPos.lat, gpsPos.lng], 17);
+      $('gpsForm').hidden = false; $('gpsName').focus();
+    }, function(err){
+      btn.disabled = false;
+      say(err.code === 1 ? 'Location permission was denied. Allow location access for this site in the browser settings and try again.'
+        : err.code === 2 ? 'Your location is unavailable. Check that location services are on.'
+        : err.code === 3 ? 'Getting your location timed out. Try again.'
+        : 'Could not get your location.');
+    }, {enableHighAccuracy:true, timeout:15000, maximumAge:0});
+  });
+  $('gpsCancel').addEventListener('click', function(){ hideForms(); gpsPos = null; });
+  $('gpsForm').addEventListener('submit', function(e){
+    e.preventDefault();
+    var name = $('gpsName').value.trim();
+    if(!name){ $('gpsErr').textContent = 'A name is required.'; return; }
+    if(!gpsPos) return;
+    var p = {id:newId(), name:name, lat:gpsPos.lat, lng:gpsPos.lng, color:$('gpsColor').value};
+    data.points.push(p); save(); addMarker(p); gpsPos = null;
+    select(p.id, true);
   });
 
-  // Popup buttons (edit / delete)
-  document.addEventListener('click', function(e){
-    var b = e.target.closest && e.target.closest('button[data-act]');
-    if(!b) return;
-    var w = waypoints.filter(function(x){ return x.id === b.dataset.id; })[0];
-    if(!w) return;
-    if(b.dataset.act === 'edit'){
-      askName({title:'Edit waypoint name', lat:w.lat, lng:w.lng, value:w.name}).then(function(name){
-        if(!name) return;
-        w.name = name; save();
-        markers[w.id].options.title = name;
-        refreshPopups(); renderList(); setActive(w.id);
-      });
-    } else if(b.dataset.act === 'from'){
-      openFrom(w);
-    } else {
-      confirmDelete(w).then(function(ok){
-        if(!ok) return;
-        map.removeLayer(markers[w.id]); delete markers[w.id];
-        removeLine(w.id);
-        waypoints.forEach(function(x){ if(x.parent === w.id){ x.parent = null; removeLine(x.id); } });
-        waypoints = waypoints.filter(function(x){ return x.id !== w.id; });
-        save(); refreshPopups(); renderList(); toast('Waypoint deleted.');
-      });
-    }
-  });
-
-  // Create point from an existing waypoint (distance + bearing)
-  var fromDlg = $('fromDlg'), fromSrc = null;
-  function num(v){ return parseFloat(String(v).trim().replace(',', '.')); }
-  function readFrom(){
-    var d = num($('fDist').value), b = num($('fBrg').value);
-    if(!(d > 0)) return {err:'Enter a distance greater than 0 meters.'};
-    if(d > MAX_DIST) return {err:'Distance can be at most 20,003,931 m (half way around the Earth).'};
-    if(!isFinite(b)) return {err:'Enter a direction in degrees, 0–360 (0 = north, 90 = east).'};
-    return {d:d, b:normBearing(b)};
-  }
-  function updatePreview(){
-    var r = readFrom(), prev = $('fPrev');
-    if(r.err || !fromSrc){ prev.textContent = ''; return; }
-    var q = destination(fromSrc.lat, fromSrc.lng, r.b, r.d);
-    prev.innerHTML = 'New point at '+fmtCoord(q.lat)+', '+fmtCoord(q.lng)+'<br>Bearing '+esc(fmtBrg(r.b));
-    $('fErr').textContent = '';
-  }
-  function openFrom(w){
-    fromSrc = w;
-    $('fromTitle').textContent = 'New point from “' + w.name + '”';
-    $('fromOrigin').innerHTML = 'Origin: '+fmtCoord(w.lat)+', '+fmtCoord(w.lng);
-    $('fDist').value = ''; $('fBrg').value = ''; $('fName').value = 'Waypoint ' + (waypoints.length + 1);
-    $('fErr').textContent = ''; $('fPrev').textContent = '';
-    map.closePopup(); fromDlg.showModal(); $('fDist').focus();
-  }
-  ['fDist','fBrg'].forEach(function(id){ $(id).addEventListener('input', updatePreview); });
-  $('fCancel').addEventListener('click', function(){ fromDlg.close(); });
+  // ---- Create Point From This Waypoint
+  $('fCancel').addEventListener('click', hideForms);
   $('fromForm').addEventListener('submit', function(e){
     e.preventDefault();
-    var r = readFrom(); if(r.err){ $('fErr').textContent = r.err; return; }
-    var name = $('fName').value.trim(); if(!name){ $('fErr').textContent = 'Enter a name for the new waypoint.'; return; }
-    var q = destination(fromSrc.lat, fromSrc.lng, r.b, r.d);
-    var w = {id:newId(), name:name, lat:q.lat, lng:q.lng, created:new Date().toISOString(),
-             parent:fromSrc.id, distance:r.d, bearing:r.b};
-    waypoints.push(w); save(); addMarker(w); drawLine(w); renderList();
-    fromDlg.close();
-    map.fitBounds(lines[w.id].getBounds(), {padding:[90,90], maxZoom:19, animate:false});
-    markers[w.id].openPopup();
-    toast('Saved “'+name+'”.');
+    var src = selectedId && byId(selectedId); if(!src) return;
+    var name = $('fName').value.trim(), d = num($('fDist').value), b = num($('fBrg').value), err = $('fErr');
+    if(!name){ err.textContent = 'A name is required.'; return; }
+    if(!(d > 0)){ err.textContent = 'Enter a distance greater than 0 meters.'; return; }
+    if(d > MAX_DIST){ err.textContent = 'The distance can be at most 20,003,931 meters.'; return; }
+    if(!isFinite(b)){ err.textContent = 'Enter a direction in degrees (0 to 360).'; return; }
+    var q = destination(src.lat, src.lng, normBearing(b), d);
+    var p = {id:newId(), name:name, lat:q.lat, lng:q.lng, color:$('fColor').value};
+    data.points.push(p); data.links.push({from:src.id, to:p.id});
+    save(); addMarker(p); drawLines();
+    map.fitBounds([[src.lat, src.lng], [p.lat, p.lng]], {padding:[60,60], maxZoom:19, animate:false});
+    select(p.id, false);
+    markers[p.id].openPopup();
   });
 
-  // Initial render
-  waypoints.forEach(addMarker);
-  waypoints.forEach(drawLine);
-  renderList();
-  if(waypoints.length){
-    var b = L.latLngBounds(waypoints.map(function(w){ return [w.lat, w.lng]; }));
-    map.fitBounds(b, {padding:[60,60], maxZoom:16});
+  // ---- Edit name
+  $('eCancel').addEventListener('click', hideForms);
+  $('editForm').addEventListener('submit', function(e){
+    e.preventDefault();
+    var p = selectedId && byId(selectedId); if(!p) return;
+    var name = $('eName').value.trim();
+    if(!name){ $('eErr').textContent = 'A name is required.'; return; }
+    p.name = name; save();
+    markers[p.id].setPopupContent(popupText(p)); markers[p.id].options.title = name;
+    select(p.id, false);
+  });
+
+  // ---- Change color
+  $('cCancel').addEventListener('click', hideForms);
+  $('colorForm').addEventListener('submit', function(e){
+    e.preventDefault();
+    var p = selectedId && byId(selectedId); if(!p) return;
+    p.color = $('cColor').value; save();
+    select(p.id, false);
+  });
+
+  // ---- Routing (OSRM, FOSSGIS servers: car, bike and foot profiles; real roads and paths)
+  var MODES = {car:'Driving', bike:'Cycling', foot:'Walking'};
+  var planLayer = null, planRoute = null, planToken = 0, nav = null, userMarker = null;
+  var ARRIVE_M = 30, MOVE_M = 150, OFF_M = 50, MIN_GAP = 8000;
+  function rerr(t){ $('rErr').textContent = t || ''; }
+  function fmtDist(m){ return m < 1000 ? Math.round(m) + ' m' : (m/1000).toFixed(2) + ' km'; }
+  function fmtTime(s){
+    var m = Math.max(1, Math.round(s/60));
+    return m < 60 ? m + ' min' : Math.floor(m/60) + ' h ' + (m % 60) + ' min';
+  }
+  function hav(a, b){
+    var R = 6371008.8, r = Math.PI/180, dLa = (b.lat-a.lat)*r, dLo = (b.lng-a.lng)*r;
+    var x = Math.sin(dLa/2)*Math.sin(dLa/2) + Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dLo/2)*Math.sin(dLo/2);
+    return 2*R*Math.asin(Math.sqrt(x));
+  }
+  function dlng(a, b){ return (((a - b + 540) % 360) + 360) % 360 - 180; }
+  // distance in meters from pos to the nearest point of a route line ([lat,lng] pairs)
+  function offRoute(pos, line){
+    var k = 111320, c = Math.cos(pos.lat*Math.PI/180), best = Infinity;
+    for(var i = 0; i < line.length - 1; i++){
+      var ax = dlng(line[i][1], pos.lng)*c*k, ay = (line[i][0]-pos.lat)*k;
+      var bx = dlng(line[i+1][1], pos.lng)*c*k, by = (line[i+1][0]-pos.lat)*k;
+      var dx = bx-ax, dy = by-ay, l2 = dx*dx + dy*dy;
+      var t = l2 ? Math.max(0, Math.min(1, -(ax*dx + ay*dy)/l2)) : 0;
+      var px = ax + t*dx, py = ay + t*dy;
+      best = Math.min(best, Math.sqrt(px*px + py*py));
+    }
+    return best;
+  }
+
+  // Returns a promise for {distance, duration, line}. The route passes through every point, in the given order.
+  function fetchRoute(mode, pts){
+    var ctl = new AbortController(), t = setTimeout(function(){ ctl.abort(); }, 20000);
+    var coords = pts.map(function(p){ return p.lng.toFixed(6) + ',' + p.lat.toFixed(6); }).join(';');
+    var url = 'https://routing.openstreetmap.de/routed-' + mode + '/route/v1/driving/' + coords + '?overview=full&geometries=geojson&steps=false';
+    return fetch(url, {signal: ctl.signal}).then(function(r){
+      clearTimeout(t);
+      return r.json().catch(function(){ throw new Error('The routing service returned an error (HTTP ' + r.status + ').'); });
+    }).then(function(j){
+      if(j.code === 'NoRoute') throw new Error('No route was found between these points for this travel mode.');
+      if(j.code === 'NoSegment') throw new Error('A waypoint is too far from any road or path for this travel mode.');
+      if(j.code !== 'Ok' || !j.routes || !j.routes.length) throw new Error('The routing service returned: ' + (j.message || j.code || 'an error') + '.');
+      var r = j.routes[0];
+      return {distance:r.distance, duration:r.duration, line:r.geometry.coordinates.map(function(c){ return [c[1], c[0]]; })};
+    }).catch(function(e){
+      clearTimeout(t);
+      if(e.name === 'AbortError') throw new Error('The routing service did not respond in time.');
+      if(e instanceof TypeError) throw new Error('Could not reach the routing service. Check your internet connection.');
+      throw e;
+    });
+  }
+
+  // ---- Route plan (start, intermediate waypoints in order, end)
+  function stops(){ return [plan.start].concat(plan.via, [plan.end]).map(byId); }
+  function validatePlan(){
+    if(!plan.start) return 'Choose a starting waypoint.';
+    if(!plan.end) return 'Choose an ending waypoint.';
+    if(plan.start === plan.end && !plan.via.length) return 'Choose a different starting and ending waypoint.';
+    return '';
+  }
+  function onPlanChanged(){
+    planToken++; planRoute = null;
+    if(planLayer){ map.removeLayer(planLayer); planLayer = null; }
+    $('rInfo').textContent = ''; rerr(''); save(); renderPlan();
+  }
+  function purgeFromPlan(id){
+    if(plan.start !== id && plan.end !== id && plan.via.indexOf(id) < 0) return;
+    if(nav) stopNav('Navigation stopped because a waypoint in the route was deleted.');
+    if(plan.start === id) plan.start = null;
+    if(plan.end === id) plan.end = null;
+    plan.via = plan.via.filter(function(x){ return x !== id; });
+    onPlanChanged();
+  }
+  function pointSelect(value, onchange, disabled){
+    var sel = document.createElement('select'); sel.disabled = disabled;
+    var o = document.createElement('option'); o.value = ''; o.textContent = '(choose a waypoint)'; sel.appendChild(o);
+    data.points.forEach(function(p){
+      var op = document.createElement('option'); op.value = p.id; op.textContent = p.name; sel.appendChild(op);
+    });
+    sel.value = value || '';
+    if(onchange) sel.addEventListener('change', function(){ onchange(sel.value); });
+    return sel;
+  }
+  function row(labelText, child){
+    var p = document.createElement('p'); p.appendChild(document.createTextNode(labelText)); p.appendChild(child); return p;
+  }
+  function renderPlan(){
+    var box = $('rPlan'), busy = !!nav; box.innerHTML = '';
+    $('rMode').value = plan.mode; $('rMode').disabled = busy;
+    box.appendChild(row('Start: ', pointSelect(plan.start, function(v){ plan.start = v || null; onPlanChanged(); }, busy)));
+    var h = document.createElement('p'); h.textContent = 'Intermediate waypoints, in travel order:'; box.appendChild(h);
+    if(!plan.via.length){ var none = document.createElement('p'); none.textContent = 'None'; box.appendChild(none); }
+    else {
+      var ol = document.createElement('ol');
+      plan.via.forEach(function(id, i){
+        var li = document.createElement('li'), p = byId(id);
+        li.appendChild(document.createTextNode(p.name + ' '));
+        [['Up', -1], ['Down', 1]].forEach(function(d){
+          var b = button(d[0], function(){
+            var j = i + d[1]; if(j < 0 || j >= plan.via.length) return;
+            var t = plan.via[i]; plan.via[i] = plan.via[j]; plan.via[j] = t; onPlanChanged();
+          });
+          b.disabled = busy; li.appendChild(b); li.appendChild(document.createTextNode(' '));
+        });
+        var rm = button('Remove', function(){ plan.via.splice(i, 1); onPlanChanged(); });
+        rm.disabled = busy; li.appendChild(rm); ol.appendChild(li);
+      });
+      box.appendChild(ol);
+    }
+    var add = pointSelect('', null, busy), addBtn = button('Add intermediate waypoint', function(){
+      if(!add.value) return; plan.via.push(add.value); onPlanChanged();
+    });
+    addBtn.disabled = busy;
+    var ap = document.createElement('p'); ap.appendChild(add); ap.appendChild(document.createTextNode(' ')); ap.appendChild(addBtn); box.appendChild(ap);
+    box.appendChild(row('End: ', pointSelect(plan.end, function(v){ plan.end = v || null; onPlanChanged(); }, busy)));
+    $('rCreate').disabled = busy; $('rStart').disabled = busy; $('rStop').disabled = !busy;
+  }
+  $('rMode').addEventListener('change', function(){ plan.mode = $('rMode').value; onPlanChanged(); });
+
+  function drawPlan(){
+    if(planLayer) map.removeLayer(planLayer);
+    planLayer = L.polyline(planRoute.line, {color:'#00f', weight:4}).addTo(map);
+  }
+  function showPlanInfo(){
+    $('rInfo').innerHTML = '<p>Route: ' + esc(stops().map(function(p){ return p.name; }).join(' → ')) + '<br>Travel mode: ' + MODES[plan.mode] +
+      '<br>Distance: ' + fmtDist(planRoute.distance) + '<br>Estimated travel time: ' + fmtTime(planRoute.duration) + '</p>';
+  }
+  function createRoute(){
+    rerr(''); var err = validatePlan(); if(err){ rerr(err); return; }
+    var tok = ++planToken; $('rInfo').textContent = 'Calculating route...';
+    fetchRoute(plan.mode, stops()).then(function(r){
+      if(tok !== planToken) return;
+      planRoute = r; drawPlan(); showPlanInfo();
+      map.fitBounds(planLayer.getBounds(), {padding:[40,40]});
+    }).catch(function(e){ if(tok !== planToken) return; $('rInfo').textContent = ''; rerr(e.message); });
+  }
+  $('rCreate').addEventListener('click', createRoute);
+  $('rClear').addEventListener('click', function(){
+    if(nav) stopNav();
+    plan.start = null; plan.end = null; plan.via = []; onPlanChanged();
+  });
+  $('rRecalc').addEventListener('click', function(){
+    if(!nav) { createRoute(); return; }
+    if(nav.pos) calcNav(); else rerr('Waiting for your GPS position.');
+  });
+
+  // ---- Live navigation
+  $('rStart').addEventListener('click', function(){
+    rerr(''); var err = validatePlan(); if(err){ rerr(err); return; }
+    if(!('geolocation' in navigator)){ rerr('This browser does not support location access.'); return; }
+    if(!window.isSecureContext){ rerr('Location access needs a secure page (HTTPS or localhost).'); return; }
+    if(planLayer){ map.removeLayer(planLayer); planLayer = null; }   // redrawn when navigation stops
+    nav = {targets:[plan.start].concat(plan.via, [plan.end]), idx:0, pos:null, route:null, last:null, busy:false, pending:false, fitted:false, watch:null};
+    $('rInfo').textContent = '';
+    // The browser asks for location permission the first time this is called.
+    nav.watch = navigator.geolocation.watchPosition(onPos, onPosError, {enableHighAccuracy:true, maximumAge:1000, timeout:20000});
+    renderPlan(); renderNav();
+  });
+  $('rStop').addEventListener('click', function(){ stopNav(); });
+
+  function stopNav(msg){
+    if(!nav) return;
+    navigator.geolocation.clearWatch(nav.watch); nav = null;
+    if(userMarker){ map.removeLayer(userMarker); userMarker = null; }
+    if(navLayer){ map.removeLayer(navLayer); navLayer = null; }
+    if(planRoute) drawPlan();
+    if(msg) $('rInfo').textContent = msg; else if(planRoute) showPlanInfo(); else $('rInfo').textContent = '';
+    renderPlan(); renderNav();
+  }
+  var navLayer = null;
+
+  function onPosError(err){
+    if(err.code === 1) stopNav('Location permission was denied. Allow location access for this site in the browser settings and try again.');
+    else rerr(err.code === 3 ? 'Waiting for a GPS signal...' : 'Your location is unavailable. Check that location services are on.');
+  }
+
+  function onPos(p){
+    if(!nav) return;
+    rerr('');
+    var pos = {lat:p.coords.latitude, lng:p.coords.longitude, acc:p.coords.accuracy};
+    nav.pos = pos;
+    if(!userMarker){
+      userMarker = L.marker([pos.lat, pos.lng], {icon:meIcon, title:'Your position', zIndexOffset:1000}).addTo(map);
+      userMarker.bindPopup('Your current position');
+    } else userMarker.setLatLng([pos.lat, pos.lng]);
+
+    // Reached the next waypoint? Then the following one becomes the target.
+    var advanced = false, radius = Math.max(ARRIVE_M, Math.min(pos.acc || 0, 100));
+    while(nav.idx < nav.targets.length && hav(pos, byId(nav.targets[nav.idx])) <= radius){ nav.idx++; advanced = true; }
+    if(nav.idx >= nav.targets.length){
+      stopNav('You reached the end waypoint (' + byId(plan.end).name + '). Navigation stopped.'); return;
+    }
+    renderNav();
+
+    var now = Date.now(), need = advanced || !nav.last;
+    if(!need && now - nav.last.t >= MIN_GAP){
+      need = !nav.route || hav(pos, nav.last) >= MOVE_M || offRoute(pos, nav.route.line) > Math.max(OFF_M, pos.acc || 0);
+    }
+    if(need) calcNav();
+  }
+
+  // Fastest route from the current position, through every remaining waypoint in the chosen order.
+  function calcNav(){
+    var n = nav; if(!n || !n.pos) return;
+    if(n.busy){ n.pending = true; return; }
+    n.busy = true; n.last = {lat:n.pos.lat, lng:n.pos.lng, t:Date.now()};
+    var pts = [{lat:n.pos.lat, lng:n.pos.lng}].concat(n.targets.slice(n.idx).map(byId));
+    fetchRoute(plan.mode, pts).then(function(r){
+      if(nav !== n) return;
+      n.busy = false; n.route = r;
+      if(navLayer) map.removeLayer(navLayer);
+      navLayer = L.polyline(r.line, {color:'#008000', weight:4}).addTo(map);
+      if(!n.fitted){ n.fitted = true; map.fitBounds(navLayer.getBounds(), {padding:[40,40]}); }
+      rerr(''); renderNav();
+      if(n.pending){ n.pending = false; calcNav(); }
+    }).catch(function(e){
+      if(nav !== n) return;
+      n.busy = false; n.pending = false;
+      rerr('Route calculation failed: ' + e.message + (n.route ? ' The last calculated route is still shown.' : ''));
+      renderNav();
+    });
+  }
+
+  function renderNav(){
+    var box = $('navInfo');
+    if(!nav){ box.innerHTML = ''; return; }
+    var left = nav.targets.slice(nav.idx).map(function(id){ return byId(id).name; });
+    box.innerHTML = '<h3>Navigation</h3><p>Current location: ' +
+      (nav.pos ? fmt(nav.pos.lat) + ', ' + fmt(nav.pos.lng) + ' (accuracy about ' + Math.round(nav.pos.acc) + ' m)' : 'waiting for GPS...') +
+      '<br>Next waypoint: ' + esc(left[0]) +
+      '<br>Remaining distance: ' + (nav.route ? fmtDist(nav.route.distance) : 'calculating...') +
+      '<br>Estimated remaining time: ' + (nav.route ? fmtTime(nav.route.duration) : 'calculating...') +
+      '<br>Remaining waypoints (' + left.length + '): ' + esc(left.join(' → ')) + '</p>';
+  }
+
+  // ---- Start
+  data.points = data.points.filter(function(p){
+    return p && typeof p.name === 'string' && p.name.trim() && isFinite(p.lat) && isFinite(p.lng);
+  });
+  data.points.forEach(function(p){ if(!COLORS[p.color]) p.color = 'red'; });
+  ['gpsColor','fColor','cColor'].forEach(function(id){ fillColors($(id)); });
+  plan.via = Array.isArray(plan.via) ? plan.via.filter(byId) : [];
+  if(!byId(plan.start)) plan.start = null;
+  if(!byId(plan.end)) plan.end = null;
+  if(!MODES[plan.mode]) plan.mode = 'car';
+  data.points.forEach(addMarker);
+  drawLines();
+  renderList(); renderSelected(); renderPlan();
+  if(data.points.length){
+    map.fitBounds(data.points.map(function(p){ return [p.lat, p.lng]; }), {padding:[40,40], maxZoom:16});
   }
 })();
 </script>
