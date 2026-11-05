@@ -10,6 +10,7 @@ body{background:#fff;color:#000;margin:10px}
 #map{height:420px;max-width:100%;border:1px solid #000;margin:10px 0}
 .pt{width:12px;height:12px;border:2px solid #000;border-radius:50%}
 .pt.sel{outline:2px solid #000;outline-offset:2px}
+.pt.lbl{width:22px;height:22px;line-height:22px;text-align:center;font:bold 12px Arial,sans-serif;overflow:hidden}
 .me{width:14px;height:14px;background:#0ff;border:2px solid #000}
 .sw{display:inline-block;width:12px;height:12px;border:1px solid #000;vertical-align:middle}
 .err{color:#c00}
@@ -64,7 +65,8 @@ form{margin:10px 0}
 <ul id="list"></ul>
 
 <h2>Route</h2>
-<p><label>Travel mode: <select id="rMode"><option value="car">Driving</option><option value="bike">Cycling</option><option value="foot">Walking</option></select></label></p>
+<p><label>Route mode: <select id="rModeSel"></select></label><br>Selected: <b id="rModeNow"></b> <span id="rModeDesc"></span></p>
+<p><label>Travel mode (Normal and Crazy modes): <select id="rMode"><option value="car">Driving</option><option value="bike">Cycling</option><option value="foot">Walking</option></select></label></p>
 <div id="rPlan"></div>
 <p>
   <button type="button" id="rCreate">Create Route</button>
@@ -78,9 +80,12 @@ form{margin:10px 0}
 <div id="navInfo"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.93.0/dist/umd/supabase.min.js"></script>
 <script>
 (function(){
-  var KEY = 'waypoint-map.basic.v1';
+  // Shared database (Supabase). Fill in your project values; see supabase-setup.sql.
+  var SUPABASE_URL = 'https://wjxqwrftktiqkkuulrzx.supabase.co';
+  var SUPABASE_KEY = 'sb_publishable_UuwP69YWr6byL-TSpLsG5A__gkxE3_J';
   var MAX_DIST = 20003931; // about half of Earth's circumference, in meters
   var $ = function(id){ return document.getElementById(id); };
 
@@ -110,25 +115,23 @@ form{margin:10px 0}
     return {lat: phi2/rad, lng: normLng(lng + Ld/rad)};
   }
 
-  // ---- Storage. Waypoints hold only id, name, lat, lng. Lines are kept as separate from/to pairs.
-  function load(){
-    try {
-      var d = JSON.parse(localStorage.getItem(KEY));
-      if(d && Array.isArray(d.points) && Array.isArray(d.links)){ d.route = d.route || {}; return d; }
-    } catch(e){}
-    return {points:[], links:[], route:{}};
-  }
-  var data = load();
-  var plan = data.route;
-  function save(){
-    try { localStorage.setItem(KEY, JSON.stringify(data)); }
-    catch(e){ say('Could not save. Browser storage is unavailable.'); }
+  // ---- Storage. Waypoints and lines live in the shared Supabase database.
+  // localStorage only remembers this user's own route plan (start, stops, end, modes).
+  var PLAN_KEY = 'waypoint-map.plan.v1', plan = {};
+  try { plan = JSON.parse(localStorage.getItem(PLAN_KEY)) || {}; } catch(e){}
+  var data = {points:[], links:[], route:plan}, db = null;
+  function save(){ try { localStorage.setItem(PLAN_KEY, JSON.stringify(plan)); } catch(e){} }
+  function dbWrite(q, what, undo){
+    q.then(function(r){ if(r && r.error){ say('Could not ' + what + ' (' + r.error.message + ').'); if(undo) undo(); } });
   }
 
   // ---- Helpers
   var selectedId = null, markers = {}, lineLayers = [], gpsPos = null;
   function byId(id){ return data.points.filter(function(p){ return p.id === id; })[0]; }
-  function newId(){ return 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+  function newId(){
+    if(window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c){ var r = Math.random()*16|0; return (c === 'x' ? r : (r&3|8)).toString(16); });
+  }
   function fmt(n){ return Number(n).toFixed(6); }
   function esc(s){ return String(s).replace(/[&<>"']/g, function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
@@ -148,8 +151,10 @@ form{margin:10px 0}
   var COLORS = {red:'#ff0000', blue:'#0000ff', green:'#008000', yellow:'#ffff00', orange:'#ffa500', purple:'#800080', black:'#000000', white:'#ffffff'};
   function hex(p){ return COLORS[p.color] || COLORS.red; }
   function icon(p, sel){
-    return L.divIcon({className:'', html:'<div class="pt'+(sel ? ' sel' : '')+'" style="background:'+hex(p)+'"></div>',
-      iconSize:[16,16], iconAnchor:[8,8], popupAnchor:[0,-8]});
+    var nm = p.name.trim(), short = Array.from(nm).length < 3, sz = short ? 26 : 16;   // names under 3 characters sit on the marker
+    var dark = ['red','blue','green','purple','black'].indexOf(p.color) >= 0;
+    return L.divIcon({className:'', html:'<div class="pt'+(sel ? ' sel' : '')+(short ? ' lbl' : '')+'" style="background:'+hex(p)+';color:'+(dark ? '#fff' : '#000')+'">'+(short ? esc(nm) : '')+'</div>',
+      iconSize:[sz,sz], iconAnchor:[sz/2,sz/2], popupAnchor:[0,-sz/2]});
   }
   var meIcon = L.divIcon({className:'', html:'<div class="me"></div>', iconSize:[18,18], iconAnchor:[9,9]});
   function fillColors(sel){
@@ -219,10 +224,8 @@ form{margin:10px 0}
     box.appendChild(document.createTextNode(' '));
     box.appendChild(button('Delete', function(){
       if(!confirm('Delete waypoint "' + p.name + '"?')) return;
-      data.points = data.points.filter(function(x){ return x.id !== p.id; });
-      data.links = data.links.filter(function(k){ return k.from !== p.id && k.to !== p.id; });
-      map.removeLayer(markers[p.id]); delete markers[p.id];
-      purgeFromPlan(p.id); save(); drawLines(); select(null, false);
+      dbWrite(db.from('waypoints').delete().eq('id', p.id), 'delete the waypoint');   // its lines are removed by the database
+      removePoint(p.id);
     }));
   }
 
@@ -271,7 +274,8 @@ form{margin:10px 0}
     if(!name){ $('gpsErr').textContent = 'A name is required.'; return; }
     if(!gpsPos) return;
     var p = {id:newId(), name:name, lat:gpsPos.lat, lng:gpsPos.lng, color:$('gpsColor').value};
-    data.points.push(p); save(); addMarker(p); gpsPos = null;
+    data.points.push(p); addMarker(p); gpsPos = null;
+    dbWrite(db.from('waypoints').insert(p), 'save the waypoint', function(){ removePoint(p.id); });
     select(p.id, true);
   });
 
@@ -287,8 +291,11 @@ form{margin:10px 0}
     if(!isFinite(b)){ err.textContent = 'Enter a direction in degrees (0 to 360).'; return; }
     var q = destination(src.lat, src.lng, normBearing(b), d);
     var p = {id:newId(), name:name, lat:q.lat, lng:q.lng, color:$('fColor').value};
-    data.points.push(p); data.links.push({from:src.id, to:p.id});
-    save(); addMarker(p); drawLines();
+    var lk = {id:newId(), from:src.id, to:p.id};
+    data.points.push(p); data.links.push(lk); addMarker(p); drawLines();
+    dbWrite(db.from('waypoints').insert(p).then(function(r){
+      return r.error ? r : db.from('links').insert({id:lk.id, from_id:lk.from, to_id:lk.to});
+    }), 'save the waypoint', function(){ removePoint(p.id); });
     map.fitBounds([[src.lat, src.lng], [p.lat, p.lng]], {padding:[60,60], maxZoom:19, animate:false});
     select(p.id, false);
     markers[p.id].openPopup();
@@ -301,7 +308,7 @@ form{margin:10px 0}
     var p = selectedId && byId(selectedId); if(!p) return;
     var name = $('eName').value.trim();
     if(!name){ $('eErr').textContent = 'A name is required.'; return; }
-    p.name = name; save();
+    p.name = name; dbWrite(db.from('waypoints').update({name:name}).eq('id', p.id), 'save the new name');
     markers[p.id].setPopupContent(popupText(p)); markers[p.id].options.title = name;
     select(p.id, false);
   });
@@ -311,7 +318,7 @@ form{margin:10px 0}
   $('colorForm').addEventListener('submit', function(e){
     e.preventDefault();
     var p = selectedId && byId(selectedId); if(!p) return;
-    p.color = $('cColor').value; save();
+    p.color = $('cColor').value; dbWrite(db.from('waypoints').update({color:p.color}).eq('id', p.id), 'save the new color');
     select(p.id, false);
   });
 
@@ -404,6 +411,7 @@ form{margin:10px 0}
   function renderPlan(){
     var box = $('rPlan'), busy = !!nav; box.innerHTML = '';
     $('rMode').value = plan.mode; $('rMode').disabled = busy;
+    $('rModeSel').value = plan.rmode; $('rModeNow').textContent = RMODES[plan.rmode][0]; $('rModeDesc').textContent = '- ' + RMODES[plan.rmode][1];
     box.appendChild(row('Start: ', pointSelect(plan.start, function(v){ plan.start = v || null; onPlanChanged(); }, busy)));
     var h = document.createElement('p'); h.textContent = 'Intermediate waypoints, in travel order:'; box.appendChild(h);
     if(!plan.via.length){ var none = document.createElement('p'); none.textContent = 'None'; box.appendChild(none); }
@@ -411,6 +419,7 @@ form{margin:10px 0}
       var ol = document.createElement('ol');
       plan.via.forEach(function(id, i){
         var li = document.createElement('li'), p = byId(id);
+        if(!p) return;
         li.appendChild(document.createTextNode(p.name + ' '));
         [['Up', -1], ['Down', 1]].forEach(function(d){
           var b = button(d[0], function(){
@@ -432,20 +441,33 @@ form{margin:10px 0}
     box.appendChild(row('End: ', pointSelect(plan.end, function(v){ plan.end = v || null; onPlanChanged(); }, busy)));
     $('rCreate').disabled = busy; $('rStart').disabled = busy; $('rStop').disabled = !busy;
   }
-  $('rMode').addEventListener('change', function(){ plan.mode = $('rMode').value; onPlanChanged(); });
+  function replan(){ var had = !!planRoute; onPlanChanged(); if(had) createRoute(); }   // switching modes keeps the route
+  $('rMode').addEventListener('change', function(){ plan.mode = $('rMode').value; replan(); });
+  $('rModeSel').addEventListener('change', function(){
+    plan.rmode = $('rModeSel').value; save();
+    if(nav){ nav.route = null; if(navLayer){ map.removeLayer(navLayer); navLayer = null; } renderPlan(); if(nav.pos) calcNav(); renderNav(); }
+    else replan();
+  });
 
   function drawPlan(){
     if(planLayer) map.removeLayer(planLayer);
     planLayer = L.polyline(planRoute.line, {color:'#00f', weight:4}).addTo(map);
   }
   function showPlanInfo(){
-    $('rInfo').innerHTML = '<p>Route: ' + esc(stops().map(function(p){ return p.name; }).join(' → ')) + '<br>Travel mode: ' + MODES[plan.mode] +
-      '<br>Distance: ' + fmtDist(planRoute.distance) + '<br>Estimated travel time: ' + fmtTime(planRoute.duration) + '</p>';
+    var st = stops(), r = planRoute, m = plan.rmode;
+    var h = '<p>Route: ' + esc(st.map(function(p){ return p.name; }).join(' → ')) + '<br>Route mode: ' + esc(RMODES[m][0]) +
+      (m === 'normal' || m === 'crazy' ? '<br>Travel mode: ' + MODES[plan.mode] : '') +
+      '<br>Distance: ' + fmtDist(r.distance) + '<br>Estimated travel time: ' + fmtTime(r.duration) + (r.walk ? ' (walking at 5 km/h)' : '') + '</p>';
+    if(r.bird) h += '<ol>' + r.legs.map(function(l, i){
+      return '<li>' + esc(st[i].name + ' → ' + st[i+1].name) + ': direction ' + brg(l.bearing) + ', ' + fmtDist(l.distance) + '</li>'; }).join('') + '</ol>';
+    if(r.note) h += '<p>' + esc(r.note) + '</p>';
+    if(m === 'crazy' || m === 'avoid') h += '<p>Map data may be incomplete. This does not guarantee that the route is legally accessible, so respect signs and private property.</p>';
+    $('rInfo').innerHTML = h;
   }
   function createRoute(){
     rerr(''); var err = validatePlan(); if(err){ rerr(err); return; }
     var tok = ++planToken; $('rInfo').textContent = 'Calculating route...';
-    fetchRoute(plan.mode, stops()).then(function(r){
+    computeRoute(stops()).then(function(r){
       if(tok !== planToken) return;
       planRoute = r; drawPlan(); showPlanInfo();
       map.fitBounds(planLayer.getBounds(), {padding:[40,40]});
@@ -509,7 +531,7 @@ form{margin:10px 0}
     }
     renderNav();
 
-    var now = Date.now(), need = advanced || !nav.last;
+    var now = Date.now(), need = advanced || !nav.last || plan.rmode === 'bird';
     if(!need && now - nav.last.t >= MIN_GAP){
       need = !nav.route || hav(pos, nav.last) >= MOVE_M || offRoute(pos, nav.route.line) > Math.max(OFF_M, pos.acc || 0);
     }
@@ -522,7 +544,7 @@ form{margin:10px 0}
     if(n.busy){ n.pending = true; return; }
     n.busy = true; n.last = {lat:n.pos.lat, lng:n.pos.lng, t:Date.now()};
     var pts = [{lat:n.pos.lat, lng:n.pos.lng}].concat(n.targets.slice(n.idx).map(byId));
-    fetchRoute(plan.mode, pts).then(function(r){
+    computeRoute(pts).then(function(r){
       if(nav !== n) return;
       n.busy = false; n.route = r;
       if(navLayer) map.removeLayer(navLayer);
@@ -542,30 +564,355 @@ form{margin:10px 0}
     var box = $('navInfo');
     if(!nav){ box.innerHTML = ''; return; }
     var left = nav.targets.slice(nav.idx).map(function(id){ return byId(id).name; });
-    box.innerHTML = '<h3>Navigation</h3><p>Current location: ' +
+    box.innerHTML = '<h3>Navigation</h3><p>Route mode: ' + esc(RMODES[plan.rmode][0]) + '<br>Current location: ' +
       (nav.pos ? fmt(nav.pos.lat) + ', ' + fmt(nav.pos.lng) + ' (accuracy about ' + Math.round(nav.pos.acc) + ' m)' : 'waiting for GPS...') +
       '<br>Next waypoint: ' + esc(left[0]) +
+      (nav.route && nav.route.bird ? '<br>Direction to next waypoint: ' + brg(nav.route.legs[0].bearing) + ', ' + fmtDist(nav.route.legs[0].distance) : '') +
       '<br>Remaining distance: ' + (nav.route ? fmtDist(nav.route.distance) : 'calculating...') +
-      '<br>Estimated remaining time: ' + (nav.route ? fmtTime(nav.route.duration) : 'calculating...') +
+      '<br>Estimated remaining time: ' + (nav.route ? fmtTime(nav.route.duration) + (nav.route.walk ? ' (walking at 5 km/h)' : '') : 'calculating...') +
       '<br>Remaining waypoints (' + left.length + '): ' + esc(left.join(' → ')) + '</p>';
   }
 
-  // ---- Start
-  data.points = data.points.filter(function(p){
-    return p && typeof p.name === 'string' && p.name.trim() && isFinite(p.lat) && isFinite(p.lng);
-  });
-  data.points.forEach(function(p){ if(!COLORS[p.color]) p.color = 'red'; });
-  ['gpsColor','fColor','cColor'].forEach(function(id){ fillColors($(id)); });
-  plan.via = Array.isArray(plan.via) ? plan.via.filter(byId) : [];
-  if(!byId(plan.start)) plan.start = null;
-  if(!byId(plan.end)) plan.end = null;
-  if(!MODES[plan.mode]) plan.mode = 'car';
-  data.points.forEach(addMarker);
-  drawLines();
-  renderList(); renderSelected(); renderPlan();
-  if(data.points.length){
-    map.fitBounds(data.points.map(function(p){ return [p.lat, p.lng]; }), {padding:[40,40], maxZoom:16});
+  // ---- Route modes: normal (OSRM), bird, crazy (trail router), bird avoiding obstacles
+  var RMODES = {
+    normal:['Normal Mode', 'Fastest route using roads and normal paths'],
+    bird:['Bird Mode', 'Direct straight-line route'],
+    crazy:['Crazy Mode', 'Routes using trails, forest paths and bicycle paths'],
+    avoid:['Bird Mode - Avoid Obstacles', 'Direct land route that avoids mapped impassable areas']
+  };
+  var WALK_MS = 5 / 3.6;   // walking speed assumed for the two Bird modes (m/s)
+  function brg(b){ return Number(b.toFixed(1)) + '° ' + ['N','NE','E','SE','S','SW','W','NW'][Math.round(b/45) % 8]; }
+  function computeRoute(pts){
+    var m = plan.rmode;
+    if(m === 'bird') return Promise.resolve(birdRoute(pts));
+    if(m === 'avoid') return avoidRoute(pts);
+    if(m === 'crazy') return crazyRoute(pts);
+    return fetchRoute(plan.mode, pts);
   }
+
+  // BIRD-START
+  // Vincenty inverse solution on WGS-84: geodesic distance (m) and initial bearing (degrees clockwise from north).
+  function inverse(a, b){
+    var f = 1/298.257223563, A = 6378137, B = (1-f)*A, r = Math.PI/180;
+    var L = dlng(b.lng, a.lng)*r;
+    var U1 = Math.atan((1-f)*Math.tan(a.lat*r)), U2 = Math.atan((1-f)*Math.tan(b.lat*r));
+    var sU1 = Math.sin(U1), cU1 = Math.cos(U1), sU2 = Math.sin(U2), cU2 = Math.cos(U2);
+    var lam = L, lamP, i = 0, sL, cL, sS, cS, sig, sAl, cSqAl, c2, C;
+    do {
+      sL = Math.sin(lam); cL = Math.cos(lam);
+      sS = Math.sqrt(Math.pow(cU2*sL, 2) + Math.pow(cU1*sU2 - sU1*cU2*cL, 2));
+      if(sS === 0) return {dist:0, bearing:0};
+      cS = sU1*sU2 + cU1*cU2*cL; sig = Math.atan2(sS, cS);
+      sAl = cU1*cU2*sL/sS; cSqAl = 1 - sAl*sAl;
+      c2 = cSqAl ? cS - 2*sU1*sU2/cSqAl : 0;
+      C = f/16*cSqAl*(4 + f*(4 - 3*cSqAl));
+      lamP = lam; lam = L + (1-C)*f*sAl*(sig + C*sS*(c2 + C*cS*(-1 + 2*c2*c2)));
+    } while(Math.abs(lam - lamP) > 1e-12 && ++i < 100);
+    var bearing = normBearing(Math.atan2(cU2*Math.sin(lam), cU1*sU2 - sU1*cU2*Math.cos(lam))/r);
+    if(i >= 100) return {dist:hav(a, b), bearing:bearing};
+    var uSq = cSqAl*(A*A - B*B)/(B*B);
+    var K1 = 1 + uSq/16384*(4096 + uSq*(-768 + uSq*(320 - 175*uSq)));
+    var K2 = uSq/1024*(256 + uSq*(-128 + uSq*(74 - 47*uSq)));
+    var dS = K2*sS*(c2 + K2/4*(cS*(-1 + 2*c2*c2) - K2/6*c2*(-3 + 4*sS*sS)*(-3 + 4*c2*c2)));
+    return {dist:B*K1*(sig - dS), bearing:bearing};
+  }
+  // Straight (geodesic) lines through the points in order, ignoring roads and paths.
+  function birdRoute(pts){
+    var line = [], legs = [], dist = 0, prev = null;
+    for(var i = 0; i < pts.length - 1; i++){
+      var a = pts[i], b = pts[i+1], g = inverse(a, b), n = Math.min(64, Math.max(1, Math.ceil(g.dist/50000)));
+      legs.push({distance:g.dist, bearing:g.bearing}); dist += g.dist;
+      for(var k = (i ? 1 : 0); k <= n; k++){
+        var q = k === 0 ? a : k === n ? b : destination(a.lat, a.lng, g.bearing, g.dist*k/n), lng = q.lng;
+        if(prev !== null){ while(lng - prev > 180) lng -= 360; while(lng - prev < -180) lng += 360; }
+        line.push([q.lat, lng]); prev = lng;
+      }
+    }
+    return {distance:dist, duration:dist/WALK_MS, line:line, legs:legs, bird:true, walk:true};
+  }
+  // BIRD-END
+
+  // Crazy Mode: BRouter (OpenStreetMap) with trail-oriented profiles.
+  function crazyRoute(pts){
+    var profile = plan.mode === 'bike' ? 'MTB' : 'hiking-mountain';
+    var url = 'https://brouter.de/brouter?lonlats=' + pts.map(function(p){ return p.lng.toFixed(6) + ',' + p.lat.toFixed(6); }).join('|') +
+      '&profile=' + profile + '&alternativeidx=0&format=geojson';
+    var ctl = new AbortController(), t = setTimeout(function(){ ctl.abort(); }, 45000);
+    return fetch(url, {signal: ctl.signal}).then(function(r){
+      clearTimeout(t);
+      return r.text().then(function(txt){
+        if(!r.ok) throw new Error('The trail router said: ' + txt.slice(0, 150));
+        return JSON.parse(txt);
+      });
+    }).then(function(j){
+      var f = j.features && j.features[0]; if(!f) throw new Error('No trail route was found.');
+      return {distance:parseFloat(f.properties['track-length']), duration:parseFloat(f.properties['total-time']),
+        line:f.geometry.coordinates.map(function(c){ return [c[1], c[0]]; })};
+    }).catch(function(e){
+      clearTimeout(t);
+      if(e.name === 'AbortError') throw new Error('The trail router did not respond in time.');
+      if(e instanceof TypeError) throw new Error('Could not reach the trail router. Check your internet connection.');
+      throw e;
+    });
+  }
+
+  // AVOID-START
+  // Bird Mode - Avoid Obstacles: OpenStreetMap obstacles (Overpass) are rasterized into a grid and A* finds the
+  // shortest land route around them; the path is then straightened wherever the way is clear.
+  var obs = null;   // cache of the last downloaded obstacle data
+  var OBST = ['way["building"]','rel["building"]','way["natural"="water"]','rel["natural"="water"]','way["waterway"="riverbank"]','rel["waterway"="riverbank"]',
+    'way["waterway"~"^(river|canal)$"]','way["landuse"~"^(reservoir|basin|military)$"]','rel["landuse"~"^(reservoir|basin|military)$"]',
+    'way["access"~"^(private|no)$"][!"highway"][!"railway"][!"barrier"]','way["barrier"~"^(fence|wall|hedge|city_wall|retaining_wall)$"]',
+    'way["railway"="rail"]','way["natural"="cliff"]','way["highway"~"^(path|footway|cycleway|bridleway|steps|pedestrian|track)$"]','way["highway"]["bridge"]',
+    'node["barrier"~"^(gate|lift_gate|stile|kissing_gate|swing_gate|turnstile|entrance)$"]','node["railway"="level_crossing"]'];
+  function bounds(pts, f, minM){
+    var s = 90, n = -90, w = 180, e = -180;
+    pts.forEach(function(p){ s = Math.min(s, p.lat); n = Math.max(n, p.lat); w = Math.min(w, p.lng); e = Math.max(e, p.lng); });
+    var c = Math.cos((s+n)/2*Math.PI/180), m = Math.max(minM, f*Math.max((n-s)*111132, (e-w)*c*111320));
+    return {s:s - m/111132, n:n + m/111132, w:w - m/(c*111320), e:e + m/(c*111320)};
+  }
+  function inside(o, i){ return o.s <= i.s && o.w <= i.w && o.n >= i.n && o.e >= i.e; }
+  function getObstacles(bb){
+    if(obs && inside(obs.bb, bb)) return Promise.resolve(obs.els);
+    var box = '(' + [bb.s, bb.w, bb.n, bb.e].map(function(v){ return v.toFixed(5); }).join(',') + ')';
+    var q = '[out:json][timeout:40];(' + OBST.map(function(x){ return x + box + ';'; }).join('') + ');out geom;';
+    var ctl = new AbortController(), t = setTimeout(function(){ ctl.abort(); }, 60000);
+    return fetch('https://overpass-api.de/api/interpreter', {method:'POST', body:'data=' + encodeURIComponent(q), signal:ctl.signal,
+      headers:{'Content-Type':'application/x-www-form-urlencoded'}}).then(function(r){
+      clearTimeout(t);
+      if(!r.ok) throw new Error('The map data service is busy or timed out (HTTP ' + r.status + '). Try again in a moment.');
+      return r.json();
+    }).then(function(j){ obs = {bb:bb, els:j.elements || []}; return obs.els; }).catch(function(e){
+      clearTimeout(t);
+      if(e.name === 'AbortError') throw new Error('The map data service did not respond in time.');
+      if(e instanceof TypeError) throw new Error('Could not reach the map data service. Check your internet connection.');
+      throw e;
+    });
+  }
+  function kindOf(el){
+    var t = el.tags || {};
+    if(el.type === 'node') return 'openpt';
+    if(t.highway) return ((t.bridge && t.bridge !== 'no') || /^(path|footway|cycleway|bridleway|steps|pedestrian|track)$/.test(t.highway)) ? 'open' : '';
+    if(t.building || t.natural === 'water' || t.waterway === 'riverbank' || /^(reservoir|basin|military)$/.test(t.landuse || '')) return 'area';
+    if(/^(private|no)$/.test(t.access || '') && !t.railway && !t.barrier) return 'area';
+    if(/^(river|canal)$/.test(t.waterway || '') || t.barrier || t.railway === 'rail' || t.natural === 'cliff') return 'line';
+    return '';
+  }
+  function same(a, b){ return a[0] === b[0] && a[1] === b[1]; }
+  function ringsOf(el){
+    if(el.type === 'way') return el.geometry ? [el.geometry.map(function(g){ return [g.lat, g.lon]; })] : [];
+    var segs = (el.members || []).filter(function(m){ return m.type === 'way' && m.geometry && m.geometry.length > 1; })
+      .map(function(m){ return m.geometry.map(function(g){ return [g.lat, g.lon]; }); }), rings = [];
+    while(segs.length){        // join the member ways end to end into rings
+      var cur = segs.pop(), grew = true;
+      while(grew && !same(cur[0], cur[cur.length-1])){
+        grew = false;
+        for(var i = 0; i < segs.length; i++){
+          var s2 = segs[i], e = cur[cur.length-1];
+          if(same(e, s2[0])) cur = cur.concat(s2.slice(1));
+          else if(same(e, s2[s2.length-1])) cur = cur.concat(s2.slice(0, -1).reverse());
+          else if(same(cur[0], s2[s2.length-1])) cur = s2.slice(0, -1).concat(cur);
+          else if(same(cur[0], s2[0])) cur = s2.slice(1).reverse().concat(cur);
+          else continue;
+          segs.splice(i, 1); grew = true; break;
+        }
+      }
+      rings.push(cur);
+    }
+    return rings;
+  }
+  function fillRings(rings, g){      // even-odd scanline fill of all rings of one feature
+    var xs = {};
+    rings.forEach(function(r){
+      for(var i = 0; i < r.length; i++){
+        var a = r[i], b = r[(i+1) % r.length]; if(a[1] === b[1]) continue;
+        var y0 = Math.min(a[1], b[1]), y1 = Math.max(a[1], b[1]);
+        for(var row = Math.max(0, Math.ceil(y0 - 0.5)); row <= Math.min(g.ny - 1, Math.ceil(y1 - 0.5) - 1); row++)
+          (xs[row] = xs[row] || []).push(a[0] + (row + 0.5 - a[1])*(b[0]-a[0])/(b[1]-a[1]));
+      }
+    });
+    Object.keys(xs).forEach(function(row){
+      var a = xs[row].sort(function(p, q){ return p - q; });
+      for(var i = 0; i + 1 < a.length; i += 2)
+        for(var c = Math.max(0, Math.ceil(a[i] - 0.5)); c <= Math.min(g.nx - 1, Math.floor(a[i+1] - 0.5)); c++) g.b[row*g.nx + c] = 1;
+    });
+  }
+  function drawCells(pts, g, val){
+    for(var i = 0; i < pts.length - 1; i++){
+      var a = pts[i], b = pts[i+1], n = Math.ceil(Math.hypot(b[0]-a[0], b[1]-a[1])/0.5) + 1;
+      for(var k = 0; k <= n; k++){
+        var x = Math.floor(a[0] + (b[0]-a[0])*k/n), y = Math.floor(a[1] + (b[1]-a[1])*k/n);
+        if(x >= 0 && y >= 0 && x < g.nx && y < g.ny) g.b[y*g.nx + x] = val;
+      }
+    }
+  }
+  function nearestFree(g, x, y, R){
+    var best = -1, bd = 1e9;
+    for(var dy = -R; dy <= R; dy++) for(var dx = -R; dx <= R; dx++){
+      var cx = x + dx, cy = y + dy; if(cx < 0 || cy < 0 || cx >= g.nx || cy >= g.ny || g.b[cy*g.nx + cx]) continue;
+      var d = dx*dx + dy*dy; if(d < bd){ bd = d; best = cy*g.nx + cx; }
+    }
+    return best;
+  }
+  function astar(g, s, t){
+    var nx = g.nx, n = nx*g.ny, G = new Float32Array(n).fill(Infinity), P = new Int32Array(n).fill(-1), done = new Uint8Array(n), hf = [], hi = [];
+    var tx = t % nx, ty = (t/nx)|0, D = 1.41421356;
+    function h(i){ var dx = Math.abs(i % nx - tx), dy = Math.abs(((i/nx)|0) - ty); return dx + dy + (D - 2)*Math.min(dx, dy); }
+    function sw(a, b){ var v = hf[a]; hf[a] = hf[b]; hf[b] = v; v = hi[a]; hi[a] = hi[b]; hi[b] = v; }
+    function push(i, f){ var k = hf.length; hf.push(f); hi.push(i); while(k > 0){ var q = (k-1) >> 1; if(hf[q] <= hf[k]) break; sw(q, k); k = q; } }
+    function pop(){
+      var top = hi[0], lf = hf.pop(), li = hi.pop();
+      if(hf.length){ hf[0] = lf; hi[0] = li; var k = 0;
+        for(;;){ var l = 2*k+1, r = l+1, m = k; if(l < hf.length && hf[l] < hf[m]) m = l; if(r < hf.length && hf[r] < hf[m]) m = r; if(m === k) break; sw(m, k); k = m; } }
+      return top;
+    }
+    G[s] = 0; push(s, h(s));
+    while(hf.length){
+      var i = pop(); if(done[i]) continue; done[i] = 1; if(i === t) break;
+      var x = i % nx, y = (i/nx)|0;
+      for(var dy = -1; dy <= 1; dy++) for(var dx = -1; dx <= 1; dx++){
+        if(!dx && !dy) continue;
+        var cx = x + dx, cy = y + dy; if(cx < 0 || cy < 0 || cx >= nx || cy >= g.ny) continue;
+        var j = cy*nx + cx; if(g.b[j] || done[j]) continue;
+        if(dx && dy && (g.b[y*nx + cx] || g.b[cy*nx + x])) continue;   // never cut a corner of an obstacle
+        var ng = G[i] + (dx && dy ? D : 1);
+        if(ng < G[j]){ G[j] = ng; P[j] = i; push(j, ng + h(j)); }
+      }
+    }
+    if(!done[t]) return null;
+    var path = []; for(var k = t; k !== -1; k = P[k]) path.push(k);
+    return path.reverse();
+  }
+  function lineClear(g, a, b){
+    var dx = b[0]-a[0], dy = b[1]-a[1], n = Math.ceil(Math.hypot(dx, dy)/0.4) + 1;
+    for(var k = 0; k <= n; k++) if(g.b[Math.floor(a[1] + dy*k/n)*g.nx + Math.floor(a[0] + dx*k/n)]) return false;
+    return true;
+  }
+  function label(p){ return p.name ? '"' + p.name + '"' : 'your position'; }
+  function routeLeg(a, b, els){
+    var bb = bounds([a, b], 0.6, 400), lat0 = (bb.s + bb.n)/2, lng0 = (bb.w + bb.e)/2, c = Math.cos(lat0*Math.PI/180);
+    var W = (bb.e - bb.w)*c*111320, H = (bb.n - bb.s)*111132, cs = Math.max(4, Math.max(W, H)/700);
+    var g = {nx:Math.ceil(W/cs), ny:Math.ceil(H/cs)}; g.b = new Uint8Array(g.nx*g.ny);
+    function cell(lat, lng){ return [(dlng(lng, lng0)*c*111320 + W/2)/cs, ((lat - lat0)*111132 + H/2)/cs]; }
+    function toLL(i){ return [lat0 + (((((i/g.nx)|0) + 0.5)*cs) - H/2)/111132, lng0 + (((i % g.nx) + 0.5)*cs - W/2)/(c*111320)]; }
+    var near = els.filter(function(el){
+      var q = el.bounds; return !q || !(q.maxlat < bb.s || q.minlat > bb.n || q.maxlon < bb.w || q.minlon > bb.e);
+    });
+    near.forEach(function(el){
+      var k = kindOf(el); if(k !== 'area' && k !== 'line') return;
+      var rings = ringsOf(el).map(function(r){ return r.map(function(q){ return cell(q[0], q[1]); }); });
+      if(k === 'area') fillRings(rings, g); else rings.forEach(function(r){ drawCells(r, g, 1); });
+    });
+    near.forEach(function(el){   // bridges, paths and gates are allowed crossings
+      var k = kindOf(el);
+      if(k === 'open') ringsOf(el).forEach(function(r){ drawCells(r.map(function(q){ return cell(q[0], q[1]); }), g, 0); });
+      else if(k === 'openpt'){ var q = cell(el.lat, el.lon); for(var dy = -1; dy <= 1; dy++) for(var dx = -1; dx <= 1; dx++) drawCells([[q[0]+dx, q[1]+dy], [q[0]+dx, q[1]+dy]], g, 0); }
+    });
+    var ends = [a, b].map(function(p){
+      var q = cell(p.lat, p.lng), x = Math.floor(q[0]), y = Math.floor(q[1]);
+      if(x < 0 || y < 0 || x >= g.nx || y >= g.ny) return {err:true};
+      var i = y*g.nx + x, snapped = false;
+      if(g.b[i]){ i = nearestFree(g, x, y, Math.ceil(15/cs)); snapped = true; }
+      return i < 0 ? {err:true, blocked:true} : {i:i, snapped:snapped};
+    });
+    for(var e = 0; e < 2; e++) if(ends[e].err) return {err:(ends[e].blocked ? label([a, b][e]) + ' lies inside a mapped obstacle or restricted area, so no valid route exists.' : 'Could not place ' + label([a, b][e]) + ' on the map grid.')};
+    var path = astar(g, ends[0].i, ends[1].i);
+    if(!path) return {err:'No valid route found from ' + label(a) + ' to ' + label(b) + ' that avoids mapped obstacles (water, buildings, fences, restricted areas). It may be separated by an obstacle with no mapped crossing.'};
+    var cc = function(i){ return [i % g.nx + 0.5, ((i/g.nx)|0) + 0.5]; }, out = [path[0]], i2 = 0;
+    while(i2 < path.length - 1){ var j = path.length - 1; while(j > i2 + 1 && !lineClear(g, cc(path[i2]), cc(path[j]))) j--; out.push(path[j]); i2 = j; }
+    var line = out.map(toLL);
+    if(!ends[0].snapped) line[0] = [a.lat, a.lng];
+    if(!ends[1].snapped) line[line.length-1] = [b.lat, b.lng];
+    return {line:line, snapped:ends[0].snapped || ends[1].snapped};
+  }
+  function avoidRoute(pts){
+    for(var i = 0; i < pts.length - 1; i++){
+      var d = inverse(pts[i], pts[i+1]).dist;
+      if(d > 5000) return Promise.reject(new Error('This mode supports legs up to 5 km. The leg from ' + label(pts[i]) + ' to ' + label(pts[i+1]) + ' is ' + fmtDist(d) + '.'));
+    }
+    var bb = bounds(pts, 0.6, 400);
+    if((bb.n - bb.s)*111132 > 20000 || (bb.e - bb.w)*Math.cos(bb.s*Math.PI/180)*111320 > 20000) return Promise.reject(new Error('The waypoints cover too large an area for this mode (about 20 km including a safety margin at most).'));
+    return getObstacles(bb).then(function(els){
+      var line = [], snapped = false;
+      for(var i = 0; i < pts.length - 1; i++){
+        var r = routeLeg(pts[i], pts[i+1], els); if(r.err) throw new Error(r.err);
+        line = line.concat(i ? r.line.slice(1) : r.line); snapped = snapped || r.snapped;
+      }
+      var dist = 0; for(var k = 0; k < line.length - 1; k++) dist += inverse({lat:line[k][0], lng:line[k][1]}, {lat:line[k+1][0], lng:line[k+1][1]}).dist;
+      return {distance:dist, duration:dist/WALK_MS, line:line, walk:true,
+        note:snapped ? 'A waypoint sits inside or right next to a mapped obstacle, so the route starts or ends at the nearest accessible spot (within 15 m).' : ''};
+    });
+  }
+  // AVOID-END
+
+  // ---- Shared database: load, live updates
+  var firstLoad = true;
+  function upsertPoint(r){
+    var c = COLORS[r.color] ? r.color : 'red', p = byId(r.id);
+    if(!p){ p = {id:r.id, name:r.name, lat:r.lat, lng:r.lng, color:c}; data.points.push(p); addMarker(p); return; }
+    p.name = r.name; p.lat = r.lat; p.lng = r.lng; p.color = c;
+    var m = markers[p.id]; m.setLatLng([p.lat, p.lng]); m.setIcon(icon(p, p.id === selectedId)); m.setPopupContent(popupText(p)); m.options.title = p.name;
+  }
+  function removePoint(id){
+    if(!byId(id)) return;
+    data.points = data.points.filter(function(x){ return x.id !== id; });
+    data.links = data.links.filter(function(k){ return k.from !== id && k.to !== id; });
+    if(markers[id]){ map.removeLayer(markers[id]); delete markers[id]; }
+    purgeFromPlan(id); drawLines();
+    if(selectedId === id) select(null, false); else { renderList(); renderPlan(); }
+  }
+  function refreshAll(){ drawLines(); renderList(); renderSelected(); renderPlan(); }
+  function normalizePlan(){
+    plan.via = plan.via.filter(byId);
+    if(!byId(plan.start)) plan.start = null;
+    if(!byId(plan.end)) plan.end = null;
+    save(); renderPlan();
+  }
+  function loadAll(){
+    Promise.all([db.from('waypoints').select('id,name,lat,lng,color'), db.from('links').select('id,from_id,to_id')]).then(function(r){
+      var bad = r[0].error || r[1].error;
+      if(bad){ say('Could not load the shared waypoints (' + bad.message + ').'); return; }
+      say('');
+      var ids = {}; r[0].data.forEach(function(x){ ids[x.id] = 1; upsertPoint(x); });
+      data.points.filter(function(p){ return !ids[p.id]; }).forEach(function(p){ removePoint(p.id); });
+      data.links = r[1].data.map(function(k){ return {id:k.id, from:k.from_id, to:k.to_id}; });
+      refreshAll(); normalizePlan();
+      if(firstLoad && data.points.length){
+        firstLoad = false;
+        map.fitBounds(data.points.map(function(p){ return [p.lat, p.lng]; }), {padding:[40,40], maxZoom:16});
+      }
+    });
+  }
+  function connect(){
+    if(!window.supabase || /YOUR-/.test(SUPABASE_URL + SUPABASE_KEY)){
+      say('Shared storage is not set up yet. Put your Supabase URL and anon key at the top of the script (see supabase-setup.sql).'); return;
+    }
+    db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    db.channel('waypoint-map')
+      .on('postgres_changes', {event:'*', schema:'public', table:'waypoints'}, function(e){
+        if(e.eventType === 'DELETE') removePoint(e.old.id); else { upsertPoint(e.new); refreshAll(); }
+      })
+      .on('postgres_changes', {event:'*', schema:'public', table:'links'}, function(e){
+        if(e.eventType === 'DELETE') data.links = data.links.filter(function(k){ return k.id !== e.old.id; });
+        else if(!data.links.some(function(k){ return k.id === e.new.id; })) data.links.push({id:e.new.id, from:e.new.from_id, to:e.new.to_id});
+        drawLines();
+      })
+      .subscribe(function(status){
+        if(status === 'SUBSCRIBED') loadAll();
+        else if(status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') say('Live updates are disconnected. Trying to reconnect...');
+      });
+  }
+
+  // ---- Start
+  ['gpsColor','fColor','cColor'].forEach(function(id){ fillColors($(id)); });
+  Object.keys(RMODES).forEach(function(k){
+    var o = document.createElement('option'); o.value = k; o.textContent = RMODES[k][0]; $('rModeSel').appendChild(o);
+  });
+  plan.via = Array.isArray(plan.via) ? plan.via : [];
+  if(!MODES[plan.mode]) plan.mode = 'car';
+  if(!RMODES[plan.rmode]) plan.rmode = 'normal';
+  renderList(); renderSelected(); renderPlan();
+  connect();
 })();
 </script>
 </body>
