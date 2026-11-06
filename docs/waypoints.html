@@ -16,13 +16,19 @@ body{background:#fff;color:#000;margin:10px}
 .err{color:#c00}
 input[type=text]{max-width:100%}
 form{margin:10px 0}
+body.picking #map{cursor:crosshair;touch-action:none}
+progress{width:300px;max-width:100%}
 </style>
 </head>
 <body>
 <h1>Waypoint Map</h1>
 
 <button type="button" id="gpsBtn">Create Point From Location</button>
+<button type="button" id="dlBtn">Download Map Area</button>
 <p id="msg" class="err" role="alert"></p>
+<p id="netStatus" role="status"></p>
+<ul id="syncNotes" class="err"></ul>
+<button type="button" id="syncClear" hidden>Dismiss</button>
 
 <form id="gpsForm" hidden>
   <p id="gpsCoords"></p>
@@ -34,6 +40,28 @@ form{margin:10px 0}
 </form>
 
 <div id="map"></div>
+
+<div id="dlBox" hidden>
+  <p id="dlHelp"></p>
+  <form id="dlForm" hidden>
+    <p><label>Name (required): <input type="text" id="dlName" maxlength="80" autocomplete="off"></label></p>
+    <p><label>Map detail: <select id="dlZoom">
+      <option value="10">Zoom 10 - cities and main roads</option>
+      <option value="11">Zoom 11 - main roads and towns</option>
+      <option value="12">Zoom 12 - most roads</option>
+      <option value="13">Zoom 13 - all roads and many paths</option>
+      <option value="14" selected>Zoom 14 - full detail, buildings and paths</option>
+    </select></label></p>
+    <p><label><input type="checkbox" id="dlRoads" checked> Routing data (Crazy Mode and Normal Mode offline)</label><br>
+    <label><input type="checkbox" id="dlObst" checked> Obstacle data (Bird Mode - Avoid Obstacles offline)</label></p>
+    <p id="dlGeoNote"></p>
+    <p id="dlEst"></p>
+    <button type="submit" id="dlStart">Start Download</button>
+  </form>
+  <p id="dlRun" hidden><progress id="dlProg" value="0" max="1"></progress> <span id="dlProgText"></span></p>
+  <button type="button" id="dlCancel">Cancel</button>
+  <span class="err" id="dlErr" role="alert"></span>
+</div>
 
 <h2>Selected waypoint</h2>
 <div id="selInfo"></div>
@@ -79,13 +107,22 @@ form{margin:10px 0}
 <div id="rInfo"></div>
 <div id="navInfo"></div>
 
+<h2>Downloaded Maps</h2>
+<p id="storeInfo"></p>
+<ul id="areaList"></ul>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.93.0/dist/umd/supabase.min.js"></script>
+<script src="offline-tiles.js"></script>
+<script src="offline-store.js"></script>
+<script src="offline-router.js"></script>
+<script src="offline-sync.js"></script>
+<script src="sync-link.js"></script>
 <script>
 (function(){
-  // Shared database (Supabase). Fill in your project values; see supabase-setup.sql.
-  var SUPABASE_URL = 'https://wjxqwrftktiqkkuulrzx.supabase.co';
-  var SUPABASE_KEY = 'sb_publishable_UuwP69YWr6byL-TSpLsG5A__gkxE3_J';
+  // Shared database (Supabase). The details are encrypted, and the invite link holds the key: see sync-link.js and tools/sync-link.js.
+  var SYNC_CONFIG = '';
+  var SUPABASE_URL = '', SUPABASE_KEY = '', syncLocked = '';
   var MAX_DIST = 20003931; // about half of Earth's circumference, in meters
   var $ = function(id){ return document.getElementById(id); };
 
@@ -115,15 +152,12 @@ form{margin:10px 0}
     return {lat: phi2/rad, lng: normLng(lng + Ld/rad)};
   }
 
-  // ---- Storage. Waypoints and lines live in the shared Supabase database.
+  // ---- Storage. Waypoints and lines live in the shared Supabase database, with a copy in IndexedDB for offline use.
   // localStorage only remembers this user's own route plan (start, stops, end, modes).
   var PLAN_KEY = 'waypoint-map.plan.v1', plan = {};
   try { plan = JSON.parse(localStorage.getItem(PLAN_KEY)) || {}; } catch(e){}
   var data = {points:[], links:[], route:plan}, db = null;
   function save(){ try { localStorage.setItem(PLAN_KEY, JSON.stringify(plan)); } catch(e){} }
-  function dbWrite(q, what, undo){
-    q.then(function(r){ if(r && r.error){ say('Could not ' + what + ' (' + r.error.message + ').'); if(undo) undo(); } });
-  }
 
   // ---- Helpers
   var selectedId = null, markers = {}, lineLayers = [], gpsPos = null;
@@ -137,6 +171,7 @@ form{margin:10px 0}
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
   function say(t){ $('msg').textContent = t || ''; }
   function num(v){ return parseFloat(String(v).trim().replace(',', '.')); }
+  function rowOf(p){ return {id:p.id, name:p.name, lat:p.lat, lng:p.lng, color:p.color}; }
   function hideForms(){
     ['gpsForm','fromForm','editForm','colorForm'].forEach(function(id){ $(id).hidden = true; });
     ['gpsErr','fErr','eErr'].forEach(function(id){ $(id).textContent = ''; });
@@ -144,7 +179,7 @@ form{margin:10px 0}
 
   // ---- Map
   var map = L.map('map').setView([20, 0], 2);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  var osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
   }).addTo(map);
@@ -207,7 +242,7 @@ form{margin:10px 0}
     var p = selectedId && byId(selectedId);
     if(!p){ box.textContent = 'No waypoint selected.'; return; }
     var info = document.createElement('p');
-    info.innerHTML = 'Name: '+esc(p.name)+'<br>Latitude: '+fmt(p.lat)+'<br>Longitude: '+fmt(p.lng)+'<br>Color: '+esc(p.color)+' <span class="sw" style="background:'+hex(p)+'"></span>';
+    info.innerHTML = 'Name: '+esc(p.name)+'<br>Latitude: '+fmt(p.lat)+'<br>Longitude: '+fmt(p.lng)+'<br>Color: '+esc(p.color)+' <span class="sw" style="background:'+hex(p)+'"></span><br>Status: '+(sync.waiting(p.id) ? 'Waiting to synchronize' : 'Synchronized');
     box.appendChild(info);
     box.appendChild(button('Create Point From This Waypoint', function(){
       hideForms(); $('fName').value = ''; $('fDist').value = ''; $('fBrg').value = ''; $('fColor').value = 'red';
@@ -224,12 +259,13 @@ form{margin:10px 0}
     box.appendChild(document.createTextNode(' '));
     box.appendChild(button('Delete', function(){
       if(!confirm('Delete waypoint "' + p.name + '"?')) return;
-      dbWrite(db.from('waypoints').delete().eq('id', p.id), 'delete the waypoint');   // its lines are removed by the database
+      queueChange({t:'delete', id:p.id, base:{name:p.name, color:p.color}});   // its lines are removed by the database
       removePoint(p.id);
     }));
   }
 
   function renderList(){
+    cacheData();
     $('count').textContent = data.points.length;
     var ul = $('list'); ul.innerHTML = '';
     if(!data.points.length){ ul.innerHTML = '<li>No waypoints yet.</li>'; return; }
@@ -240,7 +276,7 @@ form{margin:10px 0}
       var b = button(p.name, function(){ select(p.id, true); });
       if(p.id === selectedId) b.style.fontWeight = 'bold';
       li.appendChild(b);
-      li.appendChild(document.createTextNode(' ' + fmt(p.lat) + ', ' + fmt(p.lng)));
+      li.appendChild(document.createTextNode(' ' + fmt(p.lat) + ', ' + fmt(p.lng) + (sync.waiting(p.id) ? ' (waiting to synchronize)' : '')));
       ul.appendChild(li);
     });
   }
@@ -275,7 +311,7 @@ form{margin:10px 0}
     if(!gpsPos) return;
     var p = {id:newId(), name:name, lat:gpsPos.lat, lng:gpsPos.lng, color:$('gpsColor').value};
     data.points.push(p); addMarker(p); gpsPos = null;
-    dbWrite(db.from('waypoints').insert(p), 'save the waypoint', function(){ removePoint(p.id); });
+    queueChange({t:'insert', row:rowOf(p)});
     select(p.id, true);
   });
 
@@ -293,9 +329,8 @@ form{margin:10px 0}
     var p = {id:newId(), name:name, lat:q.lat, lng:q.lng, color:$('fColor').value};
     var lk = {id:newId(), from:src.id, to:p.id};
     data.points.push(p); data.links.push(lk); addMarker(p); drawLines();
-    dbWrite(db.from('waypoints').insert(p).then(function(r){
-      return r.error ? r : db.from('links').insert({id:lk.id, from_id:lk.from, to_id:lk.to});
-    }), 'save the waypoint', function(){ removePoint(p.id); });
+    sync.add({t:'insert', row:rowOf(p)});
+    queueChange({t:'link', row:{id:lk.id, from_id:lk.from, to_id:lk.to}});
     map.fitBounds([[src.lat, src.lng], [p.lat, p.lng]], {padding:[60,60], maxZoom:19, animate:false});
     select(p.id, false);
     markers[p.id].openPopup();
@@ -308,7 +343,8 @@ form{margin:10px 0}
     var p = selectedId && byId(selectedId); if(!p) return;
     var name = $('eName').value.trim();
     if(!name){ $('eErr').textContent = 'A name is required.'; return; }
-    p.name = name; dbWrite(db.from('waypoints').update({name:name}).eq('id', p.id), 'save the new name');
+    if(name !== p.name) queueChange({t:'update', id:p.id, field:'name', value:name, base:p.name});
+    p.name = name;
     markers[p.id].setPopupContent(popupText(p)); markers[p.id].options.title = name;
     select(p.id, false);
   });
@@ -318,7 +354,9 @@ form{margin:10px 0}
   $('colorForm').addEventListener('submit', function(e){
     e.preventDefault();
     var p = selectedId && byId(selectedId); if(!p) return;
-    p.color = $('cColor').value; dbWrite(db.from('waypoints').update({color:p.color}).eq('id', p.id), 'save the new color');
+    var color = $('cColor').value;
+    if(color !== p.color) queueChange({t:'update', id:p.id, field:'color', value:color, base:p.color});
+    p.color = color;
     select(p.id, false);
   });
 
@@ -586,6 +624,7 @@ form{margin:10px 0}
     var m = plan.rmode;
     if(m === 'bird') return Promise.resolve(birdRoute(pts));
     if(m === 'avoid') return avoidRoute(pts);
+    if(!online) return localRoute(pts, m === 'crazy' ? (plan.mode === 'bike' ? 'crazy-bike' : 'crazy-foot') : plan.mode);
     if(m === 'crazy') return crazyRoute(pts);
     return fetchRoute(plan.mode, pts);
   }
@@ -832,7 +871,7 @@ form{margin:10px 0}
     }
     var bb = bounds(pts, 0.6, 400);
     if((bb.n - bb.s)*111132 > 20000 || (bb.e - bb.w)*Math.cos(bb.s*Math.PI/180)*111320 > 20000) return Promise.reject(new Error('The waypoints cover too large an area for this mode (about 20 km including a safety margin at most).'));
-    return getObstacles(bb).then(function(els){
+    return (online ? getObstacles(bb) : offlineObstacles(pts)).then(function(els){
       var line = [], snapped = false;
       for(var i = 0; i < pts.length - 1; i++){
         var r = routeLeg(pts[i], pts[i+1], els); if(r.err) throw new Error(r.err);
@@ -846,8 +885,9 @@ form{margin:10px 0}
   // AVOID-END
 
   // ---- Shared database: load, live updates
-  var firstLoad = true;
-  function upsertPoint(r){
+  var firstLoad = true, cacheReady = false;
+  function upsertPoint(row){
+    var r = sync.overlay(row); if(!r) return;     // waiting to be deleted on this device
     var c = COLORS[r.color] ? r.color : 'red', p = byId(r.id);
     if(!p){ p = {id:r.id, name:r.name, lat:r.lat, lng:r.lng, color:c}; data.points.push(p); addMarker(p); return; }
     p.name = r.name; p.lat = r.lat; p.lng = r.lng; p.color = c;
@@ -871,21 +911,41 @@ form{margin:10px 0}
   function loadAll(){
     Promise.all([db.from('waypoints').select('id,name,lat,lng,color'), db.from('links').select('id,from_id,to_id')]).then(function(r){
       var bad = r[0].error || r[1].error;
-      if(bad){ say('Could not load the shared waypoints (' + bad.message + ').'); return; }
-      say('');
+      if(bad){ if(online) say('Could not load the shared waypoints (' + bad.message + ').'); return; }
       var ids = {}; r[0].data.forEach(function(x){ ids[x.id] = 1; upsertPoint(x); });
-      data.points.filter(function(p){ return !ids[p.id]; }).forEach(function(p){ removePoint(p.id); });
-      data.links = r[1].data.map(function(k){ return {id:k.id, from:k.from_id, to:k.to_id}; });
-      refreshAll(); normalizePlan();
-      if(firstLoad && data.points.length){
-        firstLoad = false;
-        map.fitBounds(data.points.map(function(p){ return [p.lat, p.lng]; }), {padding:[40,40], maxZoom:16});
-      }
+      data.points.filter(function(p){ return !ids[p.id] && !sync.created(p.id); }).forEach(function(p){ removePoint(p.id); });
+      var known = {};
+      data.links = r[1].data.concat(sync.links()).filter(function(k){ if(known[k.id]) return false; return known[k.id] = true; })
+        .map(function(k){ return {id:k.id, from:k.from_id, to:k.to_id}; });
+      refreshAll(); normalizePlan(); fitFirst();
+    });
+  }
+  function fitFirst(){
+    if(!firstLoad || !data.points.length) return;
+    firstLoad = false;
+    map.fitBounds(data.points.map(function(p){ return [p.lat, p.lng]; }), {padding:[40,40], maxZoom:16});
+  }
+  // The key comes from the invite link once, then stays on this device so reloads and offline use work.
+  var LINK_KEY = 'waypoint-map.sync-key.v1';
+  function unlock(){
+    var m = /[#&]k=([\w-]+)/.exec(location.hash), key = m && m[1];
+    try {
+      if(key) localStorage.setItem(LINK_KEY, key); else key = localStorage.getItem(LINK_KEY);
+    } catch(e){}
+    if(m) history.replaceState(null, '', location.pathname + location.search);    // keep the key out of the address bar and history
+    if(!key){ syncLocked = 'Sharing is locked: open your invite link to see the shared waypoints.'; return Promise.reject(); }
+    return GeoLink.decrypt(SYNC_CONFIG, key).then(function(c){
+      SUPABASE_URL = c.url; SUPABASE_KEY = c.key;
+    }, function(){
+      try { localStorage.removeItem(LINK_KEY); } catch(e){}
+      syncLocked = 'This invite link is not valid. Ask for a new one.';
+      throw new Error('locked');
     });
   }
   function connect(){
-    if(!window.supabase || /YOUR-/.test(SUPABASE_URL + SUPABASE_KEY)){
-      say('Shared storage is not set up yet. Put your Supabase URL and anon key at the top of the script (see supabase-setup.sql).'); return;
+    if(!window.supabase){
+      if(online) say('The shared waypoints could not be loaded because the database library is not available.');
+      return;
     }
     db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
     db.channel('waypoint-map')
@@ -898,9 +958,462 @@ form{margin:10px 0}
         drawLines();
       })
       .subscribe(function(status){
-        if(status === 'SUBSCRIBED') loadAll();
-        else if(status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') say('Live updates are disconnected. Trying to reconnect...');
+        if(status === 'SUBSCRIBED') resync();
+        else if(online && (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT')) say('Live updates are disconnected. Trying to reconnect...');
       });
+  }
+
+  // ---- Network state. navigator.onLine alone can be wrong, so a real request confirms it.
+  var online = navigator.onLine, probing = false, lastProbe = 0, reloadAfterSync = false;
+  function setOnline(v){
+    if(v === online) return;
+    online = v; applyBaseMap(); renderStatus(); renderAreas();
+    if(v) resync();
+  }
+  function probe(){
+    if(!SUPABASE_URL){ setOnline(navigator.onLine); return; }    // nothing of ours to ask until the invite link has been used
+    if(probing) return;
+    probing = true; lastProbe = Date.now();
+    fetch(SUPABASE_URL + '/auth/v1/health', {mode:'no-cors', cache:'no-store'}).then(function(){ probing = false; setOnline(true); },
+      function(){ probing = false; setOnline(false); });
+  }
+  window.addEventListener('online', probe);
+  window.addEventListener('offline', function(){ setOnline(false); });
+  osm.on('tileerror', function(){ if(Date.now() - lastProbe > 10000) probe(); });
+  setInterval(function(){
+    if(!online && navigator.onLine) probe();
+    else if(online && sync.count()) pushChanges();
+  }, 15000);
+  function renderStatus(){
+    var n = sync.count();
+    $('netStatus').textContent = 'Connection: ' + (online ? 'Online' : 'Offline') + '. Changes: ' +
+      (n ? n + ' waiting to synchronize.' : 'All synchronized.') +
+      (!online && !areas.some(mapReady) ? ' No downloaded maps on this device.' : '') + (syncLocked ? ' ' + syncLocked : '');
+  }
+
+  // ---- Waypoint changes go through the outbox (offline-sync.js)
+  var outboxMem = [];
+  var sync = GeoSync.create({
+    client:function(){ return online ? db : null; },
+    save:function(fn){
+      return GeoStore.updateKV('outbox', fn).catch(function(){ outboxMem = fn(outboxMem); return outboxMem; });
+    },
+    uid:newId,
+    onChange:function(){ renderStatus(); renderList(); renderSelected(); },
+    onConflict:function(text){
+      reloadAfterSync = true;
+      var li = document.createElement('li'); li.textContent = text; $('syncNotes').appendChild(li); $('syncClear').hidden = false;
+    }
+  });
+  function queueChange(op){ return sync.add(op).then(pushChanges); }
+  function pushChanges(){
+    if(!online || !db) return;
+    return sync.flush().then(function(){
+      if(sync.count()) probe();
+      if(reloadAfterSync){ reloadAfterSync = false; loadAll(); }
+    });
+  }
+  function resync(){
+    if(!online || !db) return;
+    return sync.flush().then(function(){ reloadAfterSync = false; loadAll(); });
+  }
+  $('syncClear').addEventListener('click', function(){ $('syncNotes').innerHTML = ''; $('syncClear').hidden = true; });
+  function cacheData(){
+    if(!cacheReady) return;
+    GeoStore.setKV('points', data.points).catch(function(){});
+    GeoStore.setKV('links', data.links).catch(function(){});
+  }
+
+  // ---- Offline base map. OpenStreetMap's tile servers forbid downloading for offline use, so downloaded areas use
+  // OpenFreeMap vector tiles, drawn by MapLibre inside Leaflet. MapLibre only loads when it is needed.
+  var TILEJSON = 'https://tiles.openfreemap.org/planet', STYLE = 'https://tiles.openfreemap.org/styles/liberty';
+  var CDN_GL = 'https://cdn.jsdelivr.net/npm/maplibre-gl@6.16.0/dist/maplibre-gl', CDN_GLL = 'https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js';
+  var GL_ATTR = '<a href="https://openfreemap.org">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/">OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+  var gl = null, glReady = null, areas = [], areaLayers = [];
+  function mapReady(a){ return a.status === 'ready'; }
+  function script(src){
+    return new Promise(function(ok, no){
+      var s = document.createElement('script'); s.src = src; s.onload = ok;
+      s.onerror = function(){ no(new Error('the map library is not available on this device')); };
+      document.head.appendChild(s);
+    });
+  }
+  function loadGL(){
+    if(glReady) return glReady;
+    var css = document.createElement('link'); css.rel = 'stylesheet'; css.href = CDN_GL + '.css'; document.head.appendChild(css);
+    glReady = import(CDN_GL + '.mjs').then(function(m){ window.maplibregl = m; return script(CDN_GLL); }).then(function(){
+      maplibregl.addProtocol('geotiles', function(p){
+        var part = p.url.replace('geotiles://', '').split('/'), kind = part.shift(), empty = new ArrayBuffer(0);
+        if(kind === 't') return GeoStore.getTile(part.join('/')).then(function(d){ return {data:d || empty}; });
+        if(kind === 'f') return GeoStore.getKV('font:' + decodeURIComponent(part[0]) + ':' + part[1]).then(function(d){ return {data:d || empty}; });
+        return GeoStore.getKV('sprite:' + part[0].split('?')[0]).then(function(d){
+          if(!d) throw new Error('Sprite not downloaded');
+          return {data:p.type === 'json' ? JSON.parse(new TextDecoder().decode(d)) : d};
+        });
+      });
+    });
+    glReady.catch(function(){ glReady = null; });
+    return glReady;
+  }
+  function applyBaseMap(){
+    drawAreas();
+    if(online){
+      if(gl && map.hasLayer(gl)) map.removeLayer(gl);
+      if(!map.hasLayer(osm)) osm.addTo(map);
+      return;
+    }
+    if(map.hasLayer(osm)) map.removeLayer(osm);
+    if(!areas.some(mapReady)) return;
+    loadGL().then(function(){ return GeoStore.getKV('style'); }).then(function(style){
+      if(online || !style) return;
+      if(!gl) gl = L.maplibreGL({style:style});
+      if(!map.hasLayer(gl)) gl.addTo(map);
+    }).catch(function(e){ say('Could not show the downloaded map (' + e.message + ').'); });
+  }
+  function drawAreas(){
+    areaLayers.forEach(function(l){ map.removeLayer(l); });
+    areaLayers = areas.filter(mapReady).map(function(a){
+      return L.rectangle([[a.bb.s, a.bb.w], [a.bb.n, a.bb.e]], {color:'#000', weight:1, dashArray:'4 4', fill:false, interactive:false}).addTo(map);
+    });
+  }
+
+  // ---- Download Map Area: draw a rectangle, choose the detail level, download
+  var pick = null, job = null, tileTpl = null, sizes = {}, estToken = 0;
+  var GEO_MAX_M = 20000, GEO_MARGIN_M = 500, ROADS_MB_KM2 = 0.2, OBST_MB_KM2 = 1, ASSET_BYTES = 1024*1024;
+  var KEEP_OBST = ['highway','bridge','building','natural','waterway','landuse','access','railway','barrier'];
+  function fmtBytes(b){ return b < 1024*1024 ? Math.max(1, Math.round(b/1024)) + ' KB' : b < 1024*1024*1024 ? (b/1024/1024).toFixed(1) + ' MB' : (b/1024/1024/1024).toFixed(1) + ' GB'; }
+  function expand(bb){ return bounds([{lat:bb.s, lng:bb.w}, {lat:bb.n, lng:bb.e}], 0, GEO_MARGIN_M); }
+  function dlInterlock(on){
+    var m = on ? 'disable' : 'enable';
+    map.dragging[m](); map.touchZoom[m](); map.doubleClickZoom[m](); map.boxZoom[m]();
+    document.body.classList.toggle('picking', on);
+  }
+  function resetDl(){
+    if(pick && pick.layer) map.removeLayer(pick.layer);
+    if(pick && pick.drawing !== undefined) dlInterlock(false);
+    pick = null; estToken++;
+    $('dlBox').hidden = true; $('dlForm').hidden = true; $('dlRun').hidden = true; $('dlErr').textContent = '';
+  }
+  $('dlBtn').addEventListener('click', function(){
+    if(job) return;
+    resetDl();
+    if(!online){ say('Downloading a map needs an internet connection.'); return; }
+    say('');
+    pick = {drawing:false, start:null, layer:null, bb:null}; dlInterlock(true);
+    $('dlBox').hidden = false; $('dlCancel').textContent = 'Cancel';
+    $('dlHelp').textContent = 'Move the map first if you need to (zoom out with the buttons), then drag on the map to draw a rectangle around the area.';
+    map.getContainer().scrollIntoView({block:'nearest'});
+  });
+  var mapEl = map.getContainer();
+  mapEl.addEventListener('pointerdown', function(e){
+    if(!pick || pick.bb && job || e.target.closest('.leaflet-control')) return;
+    e.preventDefault(); e.stopPropagation();
+    mapEl.setPointerCapture(e.pointerId);
+    pick.drawing = true; pick.start = map.mouseEventToLatLng(e);
+    if(pick.layer){ map.removeLayer(pick.layer); pick.layer = null; }
+    $('dlForm').hidden = true;
+  }, true);
+  mapEl.addEventListener('pointermove', function(e){
+    if(!pick || !pick.drawing) return;
+    e.stopPropagation();
+    var b = L.latLngBounds(pick.start, map.mouseEventToLatLng(e));
+    if(pick.layer) pick.layer.setBounds(b);
+    else pick.layer = L.rectangle(b, {color:'#00f', weight:2, fillOpacity:0.1, interactive:false}).addTo(map);
+  }, true);
+  function endPick(e){
+    if(!pick || !pick.drawing) return;
+    e.stopPropagation();
+    pick.drawing = false;
+    if(!pick.layer){ return; }
+    var b = pick.layer.getBounds(), bb = {s:b.getSouth(), w:Math.max(-180, b.getWest()), n:b.getNorth(), e:Math.min(180, b.getEast())}, sz = GeoTiles.sizeOf(bb);
+    if(sz.w < 50 || sz.h < 50){ map.removeLayer(pick.layer); pick.layer = null; return; }
+    pick.bb = bb;
+    ['dlRoads','dlObst'].forEach(function(id){ $(id).checked = true; });
+    $('dlName').value = $('dlName').value || 'Area ' + (areas.length + 1);
+    $('dlHelp').textContent = 'Drag again to redraw the rectangle.';
+    $('dlForm').hidden = false;
+    estimate();
+  }
+  mapEl.addEventListener('pointerup', endPick, true);
+  mapEl.addEventListener('pointercancel', endPick, true);
+
+  function geoAllowed(bb){ var s = GeoTiles.sizeOf(expand(bb)); return s.w <= GEO_MAX_M && s.h <= GEO_MAX_M; }
+  function tileUrl(k){
+    var p = k.split('/');
+    return tileTpl.replace('{z}', p[0]).replace('{x}', p[1]).replace('{y}', p[2]);
+  }
+  function getTpl(signal){
+    if(tileTpl) return Promise.resolve();
+    return getBin(TILEJSON, signal).then(function(b){ tileTpl = JSON.parse(new TextDecoder().decode(b)).tiles[0]; });
+  }
+  function wait(ms, signal){
+    return new Promise(function(ok, no){
+      var t = setTimeout(ok, ms);
+      if(signal) signal.addEventListener('abort', function(){ clearTimeout(t); no(new DOMException('Aborted', 'AbortError')); }, {once:true});
+    });
+  }
+  // Fetches binary data, retrying briefly when the server is busy. A tile the server doesn't have is empty (open sea).
+  function getBin(url, signal, tries){
+    tries = tries || 0;
+    return fetch(url, {signal:signal}).then(function(r){
+      if(r.status === 404 || r.status === 204) return new ArrayBuffer(0);
+      if(r.ok) return r.arrayBuffer();
+      var e = new Error('The map server answered HTTP ' + r.status + '.');
+      e.retry = r.status === 429 || r.status >= 500; throw e;
+    }).catch(function(e){
+      if(e.name === 'AbortError' || (e.message.indexOf('HTTP') >= 0 && !e.retry) || tries >= 3) throw e;
+      return wait(1000*Math.pow(2, tries), signal).then(function(){ return getBin(url, signal, tries + 1); });
+    });
+  }
+  function estimate(){
+    var tok = ++estToken, bb = pick.bb, z = +$('dlZoom').value, n = GeoTiles.count(bb, z), est = $('dlEst'), geo = geoAllowed(bb);
+    var s = GeoTiles.sizeOf(bb), km2 = s.w*s.h/1e6;
+    ['dlRoads','dlObst'].forEach(function(id){ $(id).disabled = !geo; if(!geo) $(id).checked = false; });
+    $('dlGeoNote').textContent = geo ? '' : 'Routing and obstacle data can only be downloaded for areas up to about ' + (GEO_MAX_M/1000 - 2) + ' km wide and high, so offline Crazy Mode and Avoid Obstacles will not work in this area. Draw a smaller rectangle to include them.';
+    function extra(){
+      var mb = ($('dlRoads').checked ? ROADS_MB_KM2*km2 : 0) + ($('dlObst').checked ? OBST_MB_KM2*km2 : 0);
+      return mb ? ' Routing and obstacle data: up to about ' + fmtBytes(mb*1024*1024) + ', depending on how much is mapped.' : '';
+    }
+    if(n > GeoTiles.LIMITS.tiles){
+      est.textContent = 'This is ' + n + ' map tiles. The limit is ' + GeoTiles.LIMITS.tiles + ' for one download. Choose a lower detail level or draw a smaller area.';
+      $('dlStart').disabled = true; return;
+    }
+    $('dlStart').disabled = true;
+    est.textContent = n + ' map tiles. Estimating the size...';
+    var keys = GeoTiles.sample(GeoTiles.list(bb, z), 6), ctl = new AbortController();
+    getTpl(ctl.signal).then(function(){
+      return keys.reduce(function(p, k){
+        return p.then(function(){
+          if(sizes[k] !== undefined || tok !== estToken) return;
+          return getBin(tileUrl(k), ctl.signal).then(function(b){ sizes[k] = b.byteLength; });
+        });
+      }, Promise.resolve());
+    }).then(function(){
+      if(tok !== estToken) return;
+      var total = keys.reduce(function(a, k){ return a + sizes[k]; }, 0), bytes = total/keys.length*n + ASSET_BYTES;
+      if(bytes > GeoTiles.LIMITS.bytes){
+        est.textContent = n + ' map tiles, about ' + fmtBytes(bytes) + '. The limit is ' + fmtBytes(GeoTiles.LIMITS.bytes) + ' for one download. Choose a lower detail level or draw a smaller area.';
+        return;
+      }
+      est.textContent = n + ' map tiles, about ' + fmtBytes(bytes) + '.' + extra();
+      $('dlStart').disabled = false;
+    }).catch(function(e){
+      if(tok === estToken) est.textContent = 'Could not estimate the size (' + e.message + ').';
+    });
+  }
+  ['dlZoom','dlRoads','dlObst'].forEach(function(id){ $(id).addEventListener('change', function(){ if(pick && pick.bb) estimate(); }); });
+
+  $('dlCancel').addEventListener('click', function(){
+    if(job) job.ctl.abort(); else resetDl();
+  });
+  $('dlForm').addEventListener('submit', function(e){
+    e.preventDefault();
+    if(!pick || !pick.bb || job) return;
+    var name = $('dlName').value.trim();
+    if(!name){ $('dlErr').textContent = 'A name is required.'; return; }
+    var a = {id:newId(), name:name, bb:pick.bb, zmax:+$('dlZoom').value, status:'downloading', bytes:0, tiles:0, date:Date.now(),
+      roads:$('dlRoads').checked ? 'wanted' : 'no', obstacles:$('dlObst').checked ? 'wanted' : 'no'};
+    resetDl(); $('dlName').value = '';
+    runDownload(a, null);
+  });
+
+  function progress(text){
+    $('dlProg').max = job.total || 1; $('dlProg').value = job.done;
+    $('dlProgText').textContent = text;
+  }
+  function tileProgress(){ progress(job.done + ' of ' + job.total + ' map tiles, ' + fmtBytes(job.bytes)); }
+  // previous: the stored record when downloading an area again, so cancelling or failing keeps what was there.
+  function runDownload(a, previous){
+    var keys = GeoTiles.list(a.bb, a.zmax);
+    job = {area:a, ctl:new AbortController(), done:0, total:keys.length, bytes:0};
+    var signal = job.ctl.signal;
+    if(navigator.storage && navigator.storage.persist) navigator.storage.persist();   // ask the browser not to clear the maps under storage pressure
+    $('dlBox').hidden = false; $('dlForm').hidden = true; $('dlRun').hidden = false; $('dlHelp').textContent = 'Downloading "' + a.name + '". Keep this page open.';
+    $('dlCancel').textContent = 'Cancel Download';
+    progress('Starting...');
+    (previous ? Promise.resolve() : GeoStore.put('areas', a)).then(reloadAreas).then(function(){ return getTpl(signal); })
+      .then(function(){ return saveAssets(signal); })
+      .then(function(){ return saveTiles(a, keys, signal); })
+      .then(function(){ return saveGeo(a, signal, previous); })
+      .then(function(){
+        a.status = 'ready'; a.bytes = job.bytes; a.tiles = keys.length; a.date = Date.now();
+        return GeoStore.put('areas', a);
+      }).then(function(){
+        var bad = a.roads === 'failed' || a.obstacles === 'failed';
+        finishDownload(bad ? '"' + a.name + '" was downloaded, but its routing or obstacle data was not. Use Download map again later.' : '"' + a.name + '" was downloaded.');
+      }).catch(function(e){
+        var cancelled = job.cancelled || e.name === 'AbortError';
+        var msg = cancelled ? 'The download was cancelled.' : e.name === 'QuotaExceededError' ? 'There is not enough storage space on this device.' : 'The download failed (' + e.message + ').';
+        (previous ? GeoStore.put('areas', previous) : GeoStore.deleteArea(a.id)).then(function(){ finishDownload(msg); }, function(){ finishDownload(msg); });
+      });
+  }
+  function finishDownload(msg){
+    job = null; resetDl(); say(msg);
+    reloadAreas().then(applyBaseMap);
+  }
+  function saveAssets(signal){
+    return getBin(STYLE, signal).then(function(b){
+      var style = JSON.parse(new TextDecoder().decode(b)), raster = {}, fonts = {};
+      Object.keys(style.sources).forEach(function(k){ if(style.sources[k].type !== 'vector') raster[k] = 1; });
+      var keep = Object.keys(style.sources).filter(function(k){ return !raster[k]; })[0];
+      var layers = style.layers.filter(function(l){ return !raster[l.source]; });
+      layers.forEach(function(l){
+        var f = l.layout && l.layout['text-font'];
+        (JSON.stringify(f || '').match(/Noto Sans \w+/g) || []).forEach(function(n){ fonts[n] = 1; });
+      });
+      var sprite = style.sprite, glyphs = style.glyphs, local = Object.assign({}, style, {layers:layers, sources:{}, glyphs:'geotiles://f/{fontstack}/{range}', sprite:'geotiles://s/sprite'});
+      local.sources[keep] = {type:'vector', tiles:['geotiles://t/{z}/{x}/{y}'], minzoom:0, maxzoom:14, attribution:GL_ATTR};
+      var files = [];
+      ['.json', '.png', '@2x.json', '@2x.png'].forEach(function(x){ files.push({url:sprite + x, key:'sprite:sprite' + x}); });
+      Object.keys(fonts).forEach(function(f){
+        ['0-255', '256-511', '8192-8447'].forEach(function(r){
+          files.push({url:glyphs.replace('{fontstack}', encodeURIComponent(f)).replace('{range}', r), key:'font:' + f + ':' + r});
+        });
+      });
+      return files.reduce(function(p, f){
+        return p.then(function(){ return getBin(f.url, signal); }).then(function(d){ job.bytes += d.byteLength; return GeoStore.setKV(f.key, d); });
+      }, Promise.resolve()).then(function(){ return GeoStore.setKV('style', local); });
+    });
+  }
+  function saveTiles(a, keys, signal){
+    var next = 0;
+    function worker(){
+      if(next >= keys.length) return Promise.resolve();
+      var k = keys[next++];
+      return getBin(tileUrl(k), signal).then(function(d){
+        job.bytes += d.byteLength;
+        if(job.bytes > GeoTiles.LIMITS.bytes) throw new Error('the area is larger than the ' + fmtBytes(GeoTiles.LIMITS.bytes) + ' limit');
+        return GeoStore.putTile(k, d, a.id);
+      }).then(function(){ job.done++; tileProgress(); return worker(); });
+    }
+    var w = [];
+    for(var i = 0; i < GeoTiles.LIMITS.parallel; i++) w.push(worker());
+    return Promise.all(w).catch(function(e){ job.ctl.abort(); throw e; });
+  }
+  function overpass(query, signal, what, tries){
+    tries = tries || 0;
+    var ctl = new AbortController(), t = setTimeout(function(){ ctl.abort(); }, 120000);
+    signal.addEventListener('abort', function(){ ctl.abort(); }, {once:true});
+    return fetch('https://overpass-api.de/api/interpreter', {method:'POST', body:'data=' + encodeURIComponent(query), signal:ctl.signal,
+      headers:{'Content-Type':'application/x-www-form-urlencoded'}}).then(function(r){
+      clearTimeout(t);
+      if(!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    }).then(function(j){
+      if(j.remark) throw new Error(j.remark);    // the server stopped early: the result is incomplete
+      return j.elements || [];
+    }).catch(function(e){
+      clearTimeout(t);
+      if(signal.aborted) throw new DOMException('Aborted', 'AbortError');
+      if(tries >= 3) throw e;
+      var sec = 5*Math.pow(3, tries);
+      progress('The map data service is busy. Retrying ' + what + ' in ' + sec + ' seconds...');
+      return wait(sec*1000, signal).then(function(){ return overpass(query, signal, what, tries + 1); });
+    });
+  }
+  function compactObstacles(els){
+    return els.map(function(el){
+      var o = {type:el.type}, t = {};
+      KEEP_OBST.forEach(function(k){ if(el.tags && el.tags[k] !== undefined) t[k] = el.tags[k]; });
+      o.tags = t;
+      ['id','lat','lon','bounds','geometry'].forEach(function(k){ if(el[k] !== undefined) o[k] = el[k]; });
+      if(el.members) o.members = el.members.filter(function(m){ return m.type === 'way' && m.geometry; }).map(function(m){ return {type:'way', geometry:m.geometry}; });
+      return o;
+    });
+  }
+  function saveGeo(a, signal, previous){
+    var box = expand(a.bb), c = '(' + [box.s, box.w, box.n, box.e].map(function(v){ return v.toFixed(5); }).join(',') + ')';
+    function step(field, what, query, shrink){
+      if(a[field] === 'no') return Promise.resolve();
+      progress('Downloading ' + what + '...');
+      return overpass(query, signal, what).then(function(els){
+        var d = shrink(els);
+        job.bytes += JSON.stringify(d).length;
+        return GeoStore.put('geo', {k:a.id + ':' + field, d:d});
+      }).then(function(){ a[field] = 'ready'; delete graphs[a.id]; }).catch(function(e){
+        if(e.name === 'AbortError' || e.name === 'QuotaExceededError') throw e;
+        a[field] = previous && previous[field] === 'ready' ? 'ready' : 'failed';    // the tiles are safe; Download map again can retry this
+      });
+    }
+    return step('roads', 'routing data', '[out:json][timeout:90];way["highway"]' + c + ';out body geom;', GeoRouter.compact).then(function(){
+      return step('obstacles', 'obstacle data', '[out:json][timeout:90];(' + OBST.map(function(x){ return x + c + ';'; }).join('') + ');out geom;', compactObstacles);
+    });
+  }
+
+  // ---- Downloaded Maps
+  function reloadAreas(){
+    return GeoStore.all('areas').then(function(r){ areas = r; renderAreas(); renderStatus(); }).catch(function(){});
+  }
+  var DATA_TEXT = {ready:'Downloaded', failed:'Failed', no:'Not included', wanted:'Not finished'};
+  function renderAreas(){
+    var ul = $('areaList'); ul.innerHTML = '';
+    if(!areas.length) ul.innerHTML = '<li>No downloaded maps.</li>';
+    areas.forEach(function(a){
+      var li = document.createElement('li'), p = document.createElement('p'), ok = mapReady(a);
+      p.innerHTML = '<b>' + esc(a.name) + '</b><br>Download size: ' + fmtBytes(a.bytes) + ', ' + a.tiles + ' tiles, detail level ' + a.zmax +
+        '<br>Downloaded: ' + esc(new Date(a.date).toLocaleDateString()) +
+        '<br>Map: ' + (ok ? 'Downloaded' : job && job.area.id === a.id ? 'Downloading...' : 'Not finished') +
+        '<br>Routing data: ' + DATA_TEXT[a.roads] + '<br>Obstacle data: ' + DATA_TEXT[a.obstacles];
+      li.appendChild(p);
+      li.appendChild(button('Show on map', function(){ map.fitBounds([[a.bb.s, a.bb.w], [a.bb.n, a.bb.e]]); }));
+      li.appendChild(document.createTextNode(' '));
+      var again = button('Download map again', function(){
+        if(job) return;
+        if(!online){ say('Downloading a map needs an internet connection.'); return; }
+        var copy = Object.assign({}, a, {status:a.status, roads:a.roads === 'no' ? 'no' : 'wanted', obstacles:a.obstacles === 'no' ? 'no' : 'wanted'});
+        runDownload(copy, ok ? a : null);
+      });
+      again.disabled = !!job || !online; li.appendChild(again);
+      li.appendChild(document.createTextNode(' '));
+      var del = button('Delete downloaded map', function(){
+        if(!confirm('Delete the downloaded map "' + a.name + '"?')) return;
+        delete graphs[a.id];
+        GeoStore.deleteArea(a.id).then(reloadAreas).then(applyBaseMap);
+      });
+      del.disabled = !!(job && job.area.id === a.id); li.appendChild(del);
+      ul.appendChild(li);
+    });
+    renderStorage();
+  }
+  function renderStorage(){
+    var box = $('storeInfo');
+    if(!navigator.storage || !navigator.storage.estimate){ box.textContent = 'Available storage: not reported by this browser.'; return; }
+    navigator.storage.estimate().then(function(s){
+      box.textContent = 'Available storage: ' + fmtBytes(Math.max(0, s.quota - s.usage)) + ' (' + fmtBytes(s.usage) + ' used by this site).';
+      return navigator.storage.persisted ? navigator.storage.persisted() : true;
+    }).then(function(kept){
+      if(!kept && areas.length) box.textContent += ' The browser may clear downloaded maps if the device runs low on storage.';
+    }).catch(function(){});
+  }
+
+  // ---- Offline routing, from data saved with a downloaded area
+  var graphs = {};    // built road networks: graphs[area id][profile]
+  function inBox(bb, p){ return p.lat >= bb.s && p.lat <= bb.n && p.lng >= bb.w && p.lng <= bb.e; }
+  function areaWith(pts, field){
+    return areas.filter(function(a){
+      return a[field] === 'ready' && pts.every(function(p){ return inBox(expand(a.bb), p); });
+    })[0];
+  }
+  function localRoute(pts, profile){
+    var a = areaWith(pts, 'roads');
+    if(!a) return Promise.reject(new Error('Offline routing needs routing data. Download one area that contains all the points of this route, including routing data. Bird Mode works without it.'));
+    var cached = graphs[a.id] && graphs[a.id][profile];
+    return (cached ? Promise.resolve(cached) : GeoStore.get('geo', a.id + ':roads').then(function(r){
+      var g = GeoRouter.build(r.d, profile);
+      (graphs[a.id] = graphs[a.id] || {})[profile] = g;
+      return g;
+    })).then(function(g){
+      var r = GeoRouter.route(g, pts, 500, WALK_MS);
+      if(r.error === 'snap') throw new Error(label(pts[r.point]) + ' is too far from any road or path for this travel mode.');
+      if(r.error) throw new Error('No route was found in the downloaded data for this travel mode.');
+      r.note = 'Calculated offline from downloaded data. Times are estimates.';
+      return r;
+    });
+  }
+  function offlineObstacles(pts){
+    var a = areaWith(pts, 'obstacles');
+    if(!a) return Promise.reject(new Error('Bird Mode - Avoid Obstacles needs obstacle data offline. Download one area that contains all the points of this route, including obstacle data.'));
+    return GeoStore.get('geo', a.id + ':obstacles').then(function(r){ return r.d; });
   }
 
   // ---- Start
@@ -911,8 +1424,18 @@ form{margin:10px 0}
   plan.via = Array.isArray(plan.via) ? plan.via : [];
   if(!MODES[plan.mode]) plan.mode = 'car';
   if(!RMODES[plan.rmode]) plan.rmode = 'normal';
-  renderList(); renderSelected(); renderPlan();
-  connect();
+  if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+  renderList(); renderSelected(); renderPlan(); renderAreas(); renderStatus();
+  // Show what this device already has first, so the page works with no connection at all.
+  Promise.all([GeoStore.getKV('points'), GeoStore.getKV('links'), sync.load(), reloadAreas()]).then(function(r){
+    (r[0] || []).forEach(upsertPoint);
+    data.links = r[1] || [];
+  }).catch(function(){ say('This browser is blocking storage on the device, so offline features are not available.'); }).then(function(){
+    cacheReady = true;
+    refreshAll(); normalizePlan(); applyBaseMap(); renderStatus();
+    if(!online) fitFirst();
+    return unlock().then(connect, renderStatus);
+  }).then(probe);
 })();
 </script>
 </body>
