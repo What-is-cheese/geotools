@@ -1,0 +1,14 @@
+{
+  "name": "geotools",
+  "private": true,
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@maplibre/maplibre-gl-leaflet": "0.1.4",
+    "@playwright/test": "1.65.0",
+    "@supabase/supabase-js": "2.93.0",
+    "leaflet": "1.9.4",
+    "maplibre-gl": "6.16.0"
+  }
+}
