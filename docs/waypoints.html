@@ -117,11 +117,12 @@ progress{width:300px;max-width:100%}
 <script src="offline-store.js"></script>
 <script src="offline-router.js"></script>
 <script src="offline-sync.js"></script>
+<script src="sync-link.js"></script>
 <script>
 (function(){
-  // Shared database (Supabase). Fill in your project values; see supabase-setup.sql.
-  var SUPABASE_URL = 'https://wjxqwrftktiqkkuulrzx.supabase.co';
-  var SUPABASE_KEY = 'sb_publishable_UuwP69YWr6byL-TSpLsG5A__gkxE3_J';
+  // Shared database (Supabase). The details are encrypted, and the invite link holds the key: see sync-link.js and tools/sync-link.js.
+  var SYNC_CONFIG = '';
+  var SUPABASE_URL = '', SUPABASE_KEY = '', syncLocked = '';
   var MAX_DIST = 20003931; // about half of Earth's circumference, in meters
   var $ = function(id){ return document.getElementById(id); };
 
@@ -924,9 +925,27 @@ progress{width:300px;max-width:100%}
     firstLoad = false;
     map.fitBounds(data.points.map(function(p){ return [p.lat, p.lng]; }), {padding:[40,40], maxZoom:16});
   }
+  // The key comes from the invite link once, then stays on this device so reloads and offline use work.
+  var LINK_KEY = 'waypoint-map.sync-key.v1';
+  function unlock(){
+    var m = /[#&]k=([\w-]+)/.exec(location.hash), key = m && m[1];
+    try {
+      if(key) localStorage.setItem(LINK_KEY, key); else key = localStorage.getItem(LINK_KEY);
+    } catch(e){}
+    if(m) history.replaceState(null, '', location.pathname + location.search);    // keep the key out of the address bar and history
+    if(!key){ syncLocked = 'Sharing is locked: open your invite link to see the shared waypoints.'; return Promise.reject(); }
+    return GeoLink.decrypt(SYNC_CONFIG, key).then(function(c){
+      SUPABASE_URL = c.url; SUPABASE_KEY = c.key;
+    }, function(){
+      try { localStorage.removeItem(LINK_KEY); } catch(e){}
+      syncLocked = 'This invite link is not valid. Ask for a new one.';
+      throw new Error('locked');
+    });
+  }
   function connect(){
-    if(!window.supabase || /YOUR-/.test(SUPABASE_URL + SUPABASE_KEY)){
-      if(online) say('Shared storage is not set up yet. Put your Supabase URL and anon key at the top of the script (see supabase-setup.sql).'); return;
+    if(!window.supabase){
+      if(online) say('The shared waypoints could not be loaded because the database library is not available.');
+      return;
     }
     db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
     db.channel('waypoint-map')
@@ -952,6 +971,7 @@ progress{width:300px;max-width:100%}
     if(v) resync();
   }
   function probe(){
+    if(!SUPABASE_URL){ setOnline(navigator.onLine); return; }    // nothing of ours to ask until the invite link has been used
     if(probing) return;
     probing = true; lastProbe = Date.now();
     fetch(SUPABASE_URL + '/auth/v1/health', {mode:'no-cors', cache:'no-store'}).then(function(){ probing = false; setOnline(true); },
@@ -968,7 +988,7 @@ progress{width:300px;max-width:100%}
     var n = sync.count();
     $('netStatus').textContent = 'Connection: ' + (online ? 'Online' : 'Offline') + '. Changes: ' +
       (n ? n + ' waiting to synchronize.' : 'All synchronized.') +
-      (!online && !areas.some(mapReady) ? ' No downloaded maps on this device.' : '');
+      (!online && !areas.some(mapReady) ? ' No downloaded maps on this device.' : '') + (syncLocked ? ' ' + syncLocked : '');
   }
 
   // ---- Waypoint changes go through the outbox (offline-sync.js)
@@ -1414,9 +1434,8 @@ progress{width:300px;max-width:100%}
     cacheReady = true;
     refreshAll(); normalizePlan(); applyBaseMap(); renderStatus();
     if(!online) fitFirst();
-    connect();
-    probe();
-  });
+    return unlock().then(connect, renderStatus);
+  }).then(probe);
 })();
 </script>
 </body>

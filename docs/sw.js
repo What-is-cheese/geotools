@@ -1,7 +1,7 @@
 // Keeps the app itself available offline. Downloaded maps and waypoints are in IndexedDB, not here.
-// Bump VERSION when CDN changes. CDN must list the same URLs as waypoints.html.
-var VERSION = 'v1', CACHE = 'geotools-' + VERSION, TIMEOUT = 5000;
-var LOCAL = ['waypoints.html', 'offline-tiles.js', 'offline-store.js', 'offline-router.js', 'offline-sync.js'];
+// Bump VERSION when LOCAL or CDN changes. CDN must list the same URLs as waypoints.html.
+var VERSION = 'v2', CACHE = 'geotools-' + VERSION, TIMEOUT = 5000;
+var LOCAL = ['waypoints.html', 'offline-tiles.js', 'offline-store.js', 'offline-router.js', 'offline-sync.js', 'sync-link.js'];
 var CDN = [
   'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css',
   'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js',

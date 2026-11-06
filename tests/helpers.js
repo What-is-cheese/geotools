@@ -3,6 +3,9 @@
 const fs = require('fs'), path = require('path');
 const root = path.join(__dirname, '..'), fix = path.join(__dirname, 'fixtures'), nm = path.join(root, 'node_modules');
 const CORS = {'access-control-allow-origin': '*', 'access-control-allow-headers': '*, authorization, apikey, content-type, prefer, x-client-info, accept-profile, content-profile', 'access-control-allow-methods': 'GET,POST,PATCH,DELETE,OPTIONS,HEAD'};
+const link = require('../docs/sync-link.js');
+const SECRET = 'q83vEjRWeJASNFZ4kBI0VniQEjRWeJASNFZ4kBI0Vng';
+const CONFIG = link.encrypt({url: 'https://test.supabase.co', key: 'test-key'}, SECRET);
 const CDN = {
   'leaflet.min.css': 'leaflet/dist/leaflet.css', 'leaflet.min.js': 'leaflet/dist/leaflet.js', 'supabase.min.js': '@supabase/supabase-js/dist/umd/supabase.js',
   'maplibre-gl.mjs': 'maplibre-gl/dist/maplibre-gl.mjs', 'maplibre-gl-shared.mjs': 'maplibre-gl/dist/maplibre-gl-shared.mjs', 'maplibre-gl-worker.mjs': 'maplibre-gl/dist/maplibre-gl-worker.mjs', 'maplibre-gl.css': 'maplibre-gl/dist/maplibre-gl.css', 'leaflet-maplibre-gl.js': '@maplibre/maplibre-gl-leaflet/leaflet-maplibre-gl.js'
@@ -32,7 +35,7 @@ function parse(url) {
 async function install(context, opts = {}) {
   const fake = {
     db: {waypoints: (opts.points || []).map(p => ({...p})), links: []},
-    blocked: [], tileRequests: 0, inFlight: 0, maxInFlight: 0, overpass: 'ok', overpassCalls: 0, tileDelay: 0, userAgents: new Set(), restWrites: 0
+    blocked: [], tileRequests: 0, inFlight: 0, maxInFlight: 0, overpass: 'ok', overpassCalls: 0, supabaseCalls: 0, tileDelay: 0, userAgents: new Set(), restWrites: 0
   };
   const match = (row, eq) => eq.every(([k, v]) => String(row[k]) === v);
   async function rest(route) {
@@ -85,6 +88,7 @@ async function install(context, opts = {}) {
     if (fake.offline) return route.abort('internetdisconnected');
     const q = route.request(), u = new URL(q.url()), file = u.pathname.split('/').pop();
     if (u.hostname.endsWith('supabase.co')) {
+      fake.supabaseCalls++;
       if (u.pathname.startsWith('/rest/')) return rest(route);
       return route.fulfill({status: 200, headers: CORS, body: '{}'});
     }
@@ -99,6 +103,13 @@ async function install(context, opts = {}) {
     if (CDN[file]) return route.fulfill({status: 200, headers: CORS, contentType: file.endsWith('css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(path.join(nm, CDN[file]))});
     fake.blocked.push(q.url());
     return route.abort();
+  });
+  // The committed page holds no test details, so the encrypted ones are swapped in here.
+  const blob = await CONFIG;
+  await context.route(/localhost:\d+\/waypoints\.html/, async route => {
+    if (fake.offline) return route.abort('internetdisconnected');
+    const r = await route.fetch();
+    route.fulfill({response: r, body: (await r.text()).replace(/var SYNC_CONFIG = '[^']*';/, `var SYNC_CONFIG = '${opts.blob || blob}';`)});
   });
   // Minimal Phoenix channel, enough for supabase-js to report SUBSCRIBED.
   fake.sockets = [];
@@ -121,7 +132,7 @@ const POINTS = [
   {id: '22222222-2222-4222-8222-222222222222', name: 'South', lat: 55.671, lng: 12.575, color: 'blue'}
 ];
 
-async function open(page, url = '/waypoints.html') {
+async function open(page, url = '/waypoints.html#k=' + SECRET) {
   await page.addInitScript(() => {     // shortens the Overpass retry delays (5, 15, 45 s)
     const st = window.setTimeout;
     window.setTimeout = (fn, ms, ...a) => st(fn, [5000, 15000, 45000].includes(ms) ? 5 : ms, ...a);
@@ -164,4 +175,4 @@ async function setNetwork(context, fake, on) {
   await context.setOffline(!on);
   if (!on) fake.sockets.splice(0).forEach(ws => ws.close().catch(() => {}));
 }
-module.exports = {install, open, drawArea, download, mapColors, setNetwork, POINTS};
+module.exports = {SECRET, install, open, drawArea, download, mapColors, setNetwork, POINTS};

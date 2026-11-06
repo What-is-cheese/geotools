@@ -1,6 +1,6 @@
 const {test, expect, chromium} = require('@playwright/test');
 const os = require('os'), fs = require('fs'), path = require('path');
-const {install, open, drawArea, download, mapColors, setNetwork, POINTS} = require('./helpers');
+const {SECRET, install, open, drawArea, download, mapColors, setNetwork, POINTS} = require('./helpers');
 
 let fake;
 test.beforeEach(async ({context, page}) => {
@@ -323,6 +323,46 @@ test.describe('offline changes', () => {
     await rename(page, 'North', 'Quick');
     await expect.poll(() => fake.db.waypoints.map(p => p.name)).toContain('Quick');
     await expect(page.locator('#netStatus')).toContainText('All synchronized');
+  });
+});
+
+test.describe('invite link', () => {
+  test('the key leaves the address bar and is remembered for the next visit', async ({page}) => {
+    expect(page.url()).not.toContain('#');
+    expect(page.url()).not.toContain(SECRET);
+    await page.goto('/waypoints.html');
+    await expect(page.locator('#list li')).toHaveCount(2);
+    await expect(page.locator('#netStatus')).not.toContainText('locked');
+  });
+
+  test('the shipped page holds no database details', () => {
+    const dir = path.join(__dirname, '..', 'docs');
+    for (const f of fs.readdirSync(dir)) {
+      const text = fs.readFileSync(path.join(dir, f), 'utf8');
+      expect(text).not.toMatch(/sb_publishable_|\.supabase\.co/);
+    }
+  });
+});
+
+test.describe('without a valid invite link', () => {
+  test.use({storageState: undefined});
+  test('no link: locked, and the database is never contacted', async ({browser}) => {
+    const ctx = await browser.newContext(), f = await install(ctx, {points: POINTS}), p = await ctx.newPage();
+    await p.goto('/waypoints.html');
+    await expect(p.locator('#netStatus')).toContainText('open your invite link');
+    await expect(p.locator('#list')).toContainText('No waypoints yet');
+    await p.waitForTimeout(500);
+    expect(f.supabaseCalls).toBe(0);
+    await ctx.close();
+  });
+
+  test('a wrong link: rejected and not remembered', async ({browser}) => {
+    const ctx = await browser.newContext(), f = await install(ctx, {points: POINTS}), p = await ctx.newPage();
+    await p.goto('/waypoints.html#k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+    await expect(p.locator('#netStatus')).toContainText('not valid');
+    expect(await p.evaluate(() => localStorage.getItem('waypoint-map.sync-key.v1'))).toBeNull();
+    expect(f.supabaseCalls).toBe(0);
+    await ctx.close();
   });
 });
 

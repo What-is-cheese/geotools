@@ -17,7 +17,11 @@ python3 -m http.server 8000 --directory docs
 
 The GPS features need a secure context (the code checks `window.isSecureContext`), so use `localhost` or HTTPS.
 
-The local page talks to the real shared Supabase database, so creating, editing, or deleting waypoints while testing by hand changes live data for all users.
+With an invite link, the local page talks to the real shared Supabase database, so creating, editing, or deleting waypoints while testing by hand changes live data for all users.
+
+## Private sync
+
+`SYNC_CONFIG` in `waypoints.html` is the Supabase URL and key, encrypted with AES-256-GCM (`docs/sync-link.js`). The invite link holds the decryption key after `#k=`, which browsers don't send to servers. The page stores the key in `localStorage` and removes it from the address bar. `node tools/sync-link.js <page url>` encrypts the details and prints a new link; each run invalidates older links. Never commit the plain values or an invite link. Anyone with a link has full database access, and the browser can read the plain values once unlocked, so this only protects against people without a link.
 
 ## Tests
 
@@ -29,7 +33,7 @@ npx playwright test tests/unit.spec.js      # one file
 npx playwright test -g "not overwritten"    # one test by name
 ```
 
-Tests never reach the network or the real database. `tests/helpers.js` answers every external host from fixtures and fakes Supabase, including its realtime socket, and tests fail on any request it doesn't recognise. `tests/fixtures/record.js` re-records the OpenFreeMap fixtures by hand. New logic should go in a module that loads in Node, so it can be unit tested without a browser; moving more of `waypoints.html` out this way is a long-term goal.
+Tests never reach the network or the real database. `tests/helpers.js` swaps a test `SYNC_CONFIG` into the page and answers every external host from fixtures and fakes Supabase, including its realtime socket, and tests fail on any request it doesn't recognise. `tests/fixtures/record.js` re-records the OpenFreeMap fixtures by hand. New logic should go in a module that loads in Node, so it can be unit tested without a browser; moving more of `waypoints.html` out this way is a long-term goal.
 
 Check the offline map by looking at a screenshot as well, because it draws gradually with software rendering. A service worker bug only shows up with the network really off, so use `setNetwork` in tests rather than testing online.
 

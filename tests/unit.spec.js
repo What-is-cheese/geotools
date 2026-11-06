@@ -1,5 +1,28 @@
 const {test, expect} = require('@playwright/test');
-const T = require('../docs/offline-tiles.js'), R = require('../docs/offline-router.js'), S = require('../docs/offline-sync.js');
+const L = require('../docs/sync-link.js'), T = require('../docs/offline-tiles.js'), R = require('../docs/offline-router.js'), S = require('../docs/offline-sync.js');
+
+test.describe('invite link', () => {
+  const config = {url: 'https://x.supabase.co', key: 'k'};
+  test('the right key unlocks the details', async () => {
+    const key = L.newKey();
+    expect(await L.decrypt(await L.encrypt(config, key), key)).toEqual(config);
+  });
+  test('a wrong key is rejected', async () => {
+    await expect(L.decrypt(await L.encrypt(config, L.newKey()), L.newKey())).rejects.toBeTruthy();
+  });
+  test('changed data is rejected', async () => {
+    const key = L.newKey(), blob = await L.encrypt(config, key);
+    await expect(L.decrypt(blob.slice(0, 20) + (blob[20] === 'A' ? 'B' : 'A') + blob.slice(21), key)).rejects.toBeTruthy();
+  });
+  test('the stored text does not show the details', async () => {
+    expect(await L.encrypt(config, L.newKey())).not.toContain('supabase');
+  });
+  test('keys are random and 256 bits', () => {
+    const a = L.newKey();
+    expect(a).not.toBe(L.newKey());
+    expect(Buffer.from(a, 'base64url')).toHaveLength(32);
+  });
+});
 
 test.describe('tiles', () => {
   const bb = {s: 55.67, w: 12.56, n: 55.68, e: 12.58};
